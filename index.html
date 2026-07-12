@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Programming Foundations — Chapter 1 Study App</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+  // Force classic JSX runtime (React.createElement) so the inline
+  // script works without ES module imports. Babel 8 defaults to the
+  // automatic runtime, which emits an import and breaks this page.
+  Babel.registerPreset('react-classic', {
+    presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+  });
+</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react-classic">
+const { useState } = React;
+
+// ---------- tiny Coral interpreter (chapter 1 subset) ----------
+function runCoral(code, inputText) {
+  const vars = {};
+  const inputs = inputText.trim().length ? inputText.trim().split(/\s+/) : [];
+  let inIdx = 0;
+  let output = "";
+  const err = (line, msg) => ({ ok: false, output, error: `Line ${line}: ${msg}` });
+
+  const lines = code.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trim();
+    const n = i + 1;
+    if (!line || line.startsWith("//")) continue;
+
+    // integer declaration
+    let m = line.match(/^integer\s+([A-Za-z][A-Za-z0-9]*)$/);
+    if (m) { vars[m[1]] = 0; continue; }
+
+    // Put "string" to output
+    m = line.match(/^Put\s+"([^"]*)"\s+to\s+output$/);
+    if (m) { output += m[1].replace(/\\n/g, "\n"); continue; }
+
+    // Put variable to output
+    m = line.match(/^Put\s+([A-Za-z][A-Za-z0-9]*)\s+to\s+output$/);
+    if (m) {
+      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared`);
+      output += String(vars[m[1]]);
+      continue;
+    }
+
+    // x = Get next input
+    m = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*=\s*Get next input$/);
+    if (m) {
+      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared (add: integer ${m[1]})`);
+      if (inIdx >= inputs.length) return err(n, "ran out of input values — add more in the Input box");
+      const v = Number(inputs[inIdx++]);
+      if (Number.isNaN(v)) return err(n, `input "${inputs[inIdx - 1]}" is not a number`);
+      vars[m[1]] = v;
+      continue;
+    }
+
+    // x = expression
+    m = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/);
+    if (m) {
+      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared (add: integer ${m[1]})`);
+      let expr = m[2];
+      expr = expr.replace(/[A-Za-z][A-Za-z0-9]*/g, (name) => {
+        if (name in vars) return `(${vars[name]})`;
+        return `__UNKNOWN_${name}__`;
+      });
+      if (expr.includes("__UNKNOWN_")) {
+        const bad = expr.match(/__UNKNOWN_([A-Za-z0-9]+)__/)[1];
+        return err(n, `variable "${bad}" was never declared`);
+      }
+      if (!/^[\d\s+\-*/().%]+$/.test(expr)) return err(n, "expression has characters I don't understand");
+      try {
+        const val = Function(`"use strict"; return (${expr});`)();
+        vars[m[1]] = Math.trunc(val);
+      } catch (e) {
+        return err(n, "couldn't compute that expression");
+      }
+      continue;
+    }
+
+    return err(n, `I don't recognize this statement: "${line}"`);
+  }
+  return { ok: true, output, vars };
+}
+
+// ---------- content ----------
+const LESSONS = [
+  {
+    title: "What a program is",
+    body:
+      "A program is a list of instructions that execute one at a time. Every instruction does one of three things: get INPUT (from a keyboard, file, etc.), PROCESS data (like computing x + y), or put OUTPUT somewhere (like the screen). That's it — every program you'll ever write is built from these three moves.",
+    example: 'x = Get next input\ny = Get next input\nz = x + y\nPut z to output',
+    note: "With inputs 2 and 5, this outputs 7.",
+  },
+  {
+    title: "Variables",
+    body:
+      'A variable is a name that holds a value — like a labeled box. It\'s called a "variable" because its value can vary: x = 7 puts 7 in the box, and x keeps holding 7 until something assigns it a new value. In Coral you declare one with "integer x" before using it.',
+    example: "integer wage\nwage = 20",
+    note: "wage now holds 20.",
+  },
+  {
+    title: "Output & string literals",
+    body:
+      'Put "Salary is " to output prints text. Text in double quotes is a string literal. Put salary to output (no quotes!) prints the variable\'s VALUE. The special two-character sequence \\n moves the cursor to the next line — it\'s invisible in the output itself.',
+    example: 'Put "Keep calm" to output\nPut "\\n" to output\nPut "and carry on" to output',
+    note: "Prints two lines: 'Keep calm' then 'and carry on'.",
+  },
+  {
+    title: "Comments & whitespace",
+    body:
+      "A comment starts with // and is for humans only — the computer skips it completely. It must be on its own line in Coral. Whitespace (spaces, blank lines) is mostly ignored during execution, but consistent spacing like w = x + y makes code readable. Warning: whitespace in your OUTPUT is never ignored — graders check it exactly.",
+    example: "// Compute total pay\nw = x + y",
+    note: "The // line does nothing when the program runs.",
+  },
+  {
+    title: "Bits, binary & ASCII",
+    body:
+      "Everything in a computer is stored as bits — 0s and 1s. 8 bits make a byte. Numbers use binary (base 2): each digit is a power of 2, so 1100 = 8 + 4 = 12. Characters use ASCII codes: 'A' is 65 (1000001), 'a' is 97. Try both in the Bit Lab tab.",
+    example: "1100 in binary\n= 8 + 4 + 0 + 0\n= 12",
+    note: "Read binary right-to-left: 1, 2, 4, 8, 16...",
+  },
+  {
+    title: "Pseudocode & problem solving",
+    body:
+      "Pseudocode is text that looks like a program but is simplified for humans — one statement per line, no strict rules. Programming is really problem solving: design a methodical solution FIRST (like the sock-matching or name-tag-sorting examples), then translate it into code. The language is just how you write the recipe down.",
+    example: "get each tag\nplace into A–Z pile\nsort each small pile\nstack piles in order",
+    note: "This plan (like radix sort) beats one giant sorted stack.",
+  },
+];
+
+const QUIZ = [
+  {
+    q: "Consider z = x + y. If x is 10 and y is 20, z is assigned with ____.",
+    options: ["10", "30", "1020", "Error"],
+    answer: 1,
+    why: "The process step computes 10 + 20 and stores the result, 30, in z.",
+  },
+  {
+    q: "A program's execution begins at the ____ node.",
+    options: ["Begin", "Input", "Start", "Run"],
+    answer: 2,
+    why: "Every Coral flowchart begins at the Start node and flows downward.",
+  },
+  {
+    q: "A program's statements execute ____.",
+    options: ["all at once", "sequentially", "randomly", "in reverse"],
+    answer: 1,
+    why: "One at a time, top to bottom — that's the core idea of a program.",
+  },
+  {
+    q: "Given variable numCars = 9, which statement outputs 9?",
+    options: [
+      'Put "numCars" to output',
+      "Get numCars to output",
+      "Put numCars to output",
+    ],
+    answer: 2,
+    why: 'No quotes = the variable\'s value. With quotes, it would literally print the text "numCars".',
+  },
+  {
+    q: "In a Coral flowchart, what shape is used for an input or output statement?",
+    options: ["Oval", "Rectangle", "Diamond", "Parallelogram"],
+    answer: 3,
+    why: "Parallelograms are input/output; rectangles are processing; ovals are Start/End.",
+  },
+  {
+    q: 'What does Put "a\\nb\\nc" to output print?',
+    options: ["anbnc", "a b c on one line", "a, b, c each on their own line", "Error"],
+    answer: 2,
+    why: "Each \\n is a newline — the cursor drops to the next line, so you get three lines.",
+  },
+  {
+    q: "x = Get next input, then y = Get next input. Program input is: 22 77. What happens?",
+    options: ["x gets 22, y gets 77", "x gets 77, y gets 22", "both get 22"],
+    answer: 0,
+    why: "Each input statement consumes the NEXT value in order.",
+  },
+  {
+    q: "What is binary 1100 as a decimal number?",
+    options: ["3", "12", "24", "1100"],
+    answer: 1,
+    why: "From the left: 8 + 4 + 0 + 0 = 12.",
+  },
+  {
+    q: "What is 7 as a 4-bit binary number?",
+    options: ["1110", "0101", "0111", "1000"],
+    answer: 2,
+    why: "7 = 4 + 2 + 1, so the 4, 2, and 1 bits are on: 0111.",
+  },
+  {
+    q: "Eight bits are called a ____.",
+    options: ["bit", "nibble", "byte", "word"],
+    answer: 2,
+    why: "8 bits = 1 byte, like 11000101.",
+  },
+  {
+    q: "Is this a valid Coral comment?  // Determine total //",
+    options: ["Valid", "Invalid"],
+    answer: 0,
+    why: "Everything after the first // on the line is the comment — extra slashes are just part of it.",
+  },
+  {
+    q: "Assuming y is 3 and z is 5, what does x get in:  x =y+z",
+    options: ["8", "35", "Error — bad spacing"],
+    answer: 0,
+    why: "Whitespace between items is ignored during execution, so this is just x = y + z = 8.",
+  },
+  {
+    q: "Is  num Cars = 2 5  a valid statement?",
+    options: ["Yes, numCars gets 25", "No — Error"],
+    answer: 1,
+    why: "You can't put a space INSIDE a name or a number. 'num Cars' and '2 5' aren't valid items.",
+  },
+  {
+    q: "A comment in a program is ____.",
+    options: [
+      "executed first",
+      "read by humans, ignored by the computer",
+      "required on every line",
+    ],
+    answer: 1,
+    why: "Comments explain intent to people. Execution skips them entirely.",
+  },
+];
+
+const DEFAULT_CODE = `integer wage
+integer salary
+
+wage = Get next input
+salary = wage * 40 * 52
+Put "Salary is " to output
+Put salary to output`;
+
+// ---------- components ----------
+function BitLab() {
+  const [bits, setBits] = useState([0, 0, 0, 0, 0, 0, 0, 0]);
+  const [ch, setCh] = useState("A");
+  const weights = [128, 64, 32, 16, 8, 4, 2, 1];
+  const decimal = bits.reduce((s, b, i) => s + b * weights[i], 0);
+  const code = ch ? ch.charCodeAt(0) : null;
+
+  return (
+    <div className="space-y-8">
+      <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
+          Binary builder
+        </h3>
+        <p className="text-slate-600 text-sm mb-4">
+          Tap bits on and off. The decimal value is the sum of the weights of the 1s.
+          Can you make your age? Can you make 255?
+        </p>
+        <div className="flex flex-wrap gap-2 justify-center mb-4">
+          {bits.map((b, i) => (
+            <button
+              key={i}
+              onClick={() => setBits(bits.map((x, j) => (j === i ? 1 - x : x)))}
+              className={`w-14 rounded-xl border-2 py-2 text-center transition-colors ${
+                b
+                  ? "bg-teal-600 border-teal-700 text-white"
+                  : "bg-slate-50 border-slate-300 text-slate-400"
+              }`}
+            >
+              <div className="text-2xl font-mono font-bold">{b}</div>
+              <div className={`text-xs ${b ? "text-teal-100" : "text-slate-400"}`}>
+                {weights[i]}
+              </div>
+            </button>
+          ))}
+        </div>
+        <div className="text-center">
+          <span className="text-slate-500 text-sm mr-2">decimal value</span>
+          <span className="font-mono text-4xl font-bold text-slate-900">{decimal}</span>
+        </div>
+        <div className="text-center mt-2 text-xs text-slate-500 font-mono">
+          {bits.filter(Boolean).length > 0
+            ? weights.filter((_, i) => bits[i]).join(" + ") + " = " + decimal
+            : "all bits off = 0"}
+        </div>
+      </section>
+
+      <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
+          ASCII lookup
+        </h3>
+        <p className="text-slate-600 text-sm mb-4">
+          Every character on your keyboard has a 7-bit code. Type one:
+        </p>
+        <div className="flex items-center gap-4 flex-wrap">
+          <input
+            value={ch}
+            maxLength={1}
+            onChange={(e) => setCh(e.target.value.slice(-1))}
+            className="w-16 h-16 text-center text-3xl font-mono border-2 border-slate-300 rounded-xl focus:border-teal-600 focus:outline-none"
+          />
+          {code !== null && (
+            <div className="flex gap-6">
+              <div>
+                <div className="text-xs text-slate-500 uppercase tracking-wide">bit code</div>
+                <div className="font-mono text-xl font-bold text-slate-900">
+                  {code.toString(2).padStart(7, "0")}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 uppercase tracking-wide">decimal</div>
+                <div className="font-mono text-xl font-bold text-slate-900">{code}</div>
+              </div>
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
+          Try 'A' (65) vs 'a' (97) — upper and lower case have different codes. A space is a
+          character too (32).
+        </p>
+      </section>
+    </div>
+  );
+}
+
+function Playground() {
+  const [code, setCode] = useState(DEFAULT_CODE);
+  const [input, setInput] = useState("25");
+  const [result, setResult] = useState(null);
+
+  const run = () => setResult(runCoral(code, input));
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
+          Coral playground
+        </h3>
+        <p className="text-slate-600 text-sm mb-3">
+          Write Coral, press Run, see the output instantly. Supports: integer declarations,
+          assignments, math (+ − * /), Get next input, Put ... to output, and // comments.
+        </p>
+        <textarea
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          spellCheck={false}
+          rows={9}
+          className="w-full font-mono text-sm bg-slate-900 text-teal-50 rounded-xl p-4 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y"
+        />
+        <div className="flex flex-wrap items-end gap-3 mt-3">
+          <div className="flex-1 min-w-40">
+            <label className="text-xs text-slate-500 uppercase tracking-wide">
+              Input (space-separated)
+            </label>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              className="w-full font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none"
+            />
+          </div>
+          <button
+            onClick={run}
+            className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
+          >
+            ▶ Run
+          </button>
+        </div>
+      </div>
+
+      {result && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+          <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Output</div>
+          <pre className="bg-slate-100 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap min-h-12 text-slate-900">
+            {result.output || " "}
+          </pre>
+          {!result.ok && (
+            <p className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+              {result.error}
+            </p>
+          )}
+          {result.ok && result.vars && Object.keys(result.vars).length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {Object.entries(result.vars).map(([k, v]) => (
+                <span
+                  key={k}
+                  className="font-mono text-xs bg-teal-50 text-teal-800 border border-teal-200 rounded-full px-3 py-1"
+                >
+                  {k} = {v}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-900">
+        <strong>Try the labs:</strong> For 1.12, output exactly{" "}
+        <code className="font-mono bg-white px-1 rounded">Hello World!</code>. For 1.13, the
+        No Parking sign needs two leading spaces on line one and a \n between lines —
+        whitespace must match exactly.
+      </div>
+    </div>
+  );
+}
+
+function Quiz() {
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [score, setScore] = useState(0);
+  const [done, setDone] = useState(false);
+
+  const q = QUIZ[idx];
+  const correct = picked === q.answer;
+
+  const next = () => {
+    if (idx + 1 >= QUIZ.length) setDone(true);
+    else {
+      setIdx(idx + 1);
+      setPicked(null);
+    }
+  };
+
+  const restart = () => {
+    setIdx(0);
+    setPicked(null);
+    setScore(0);
+    setDone(false);
+  };
+
+  if (done) {
+    const pct = Math.round((score / QUIZ.length) * 100);
+    return (
+      <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 text-center">
+        <div className="font-mono text-6xl font-bold text-slate-900 mb-2">
+          {score}/{QUIZ.length}
+        </div>
+        <p className="text-slate-600 mb-1">
+          {pct >= 85
+            ? "Excellent — you've got this chapter down."
+            : pct >= 60
+            ? "Solid. Review the ones you missed and run it again."
+            : "Good start — reread the Learn tab, then try again."}
+        </p>
+        <button
+          onClick={restart}
+          className="mt-4 bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
+        >
+          Retake quiz
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <div className="flex justify-between items-center mb-4">
+        <span className="font-mono text-xs text-slate-500">
+          Question {idx + 1} of {QUIZ.length}
+        </span>
+        <span className="font-mono text-xs text-teal-700 font-semibold">score: {score}</span>
+      </div>
+      <div className="h-1.5 bg-slate-100 rounded-full mb-5">
+        <div
+          className="h-1.5 bg-teal-600 rounded-full transition-all"
+          style={{ width: `${(idx / QUIZ.length) * 100}%` }}
+        />
+      </div>
+      <p className="text-slate-900 font-medium mb-4 whitespace-pre-wrap">{q.q}</p>
+      <div className="space-y-2">
+        {q.options.map((opt, i) => {
+          let cls = "border-slate-300 bg-slate-50 hover:border-teal-500";
+          if (picked !== null) {
+            if (i === q.answer) cls = "border-teal-600 bg-teal-50 text-teal-900";
+            else if (i === picked) cls = "border-rose-400 bg-rose-50 text-rose-900";
+            else cls = "border-slate-200 bg-slate-50 text-slate-400";
+          }
+          return (
+            <button
+              key={i}
+              disabled={picked !== null}
+              onClick={() => {
+                setPicked(i);
+                if (i === q.answer) setScore(score + 1);
+              }}
+              className={`w-full text-left border-2 rounded-xl px-4 py-3 font-mono text-sm transition-colors ${cls}`}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+      {picked !== null && (
+        <div
+          className={`mt-4 rounded-xl px-4 py-3 text-sm ${
+            correct
+              ? "bg-teal-50 border border-teal-200 text-teal-900"
+              : "bg-rose-50 border border-rose-200 text-rose-900"
+          }`}
+        >
+          <strong>{correct ? "Correct." : "Not quite."}</strong> {q.why}
+        </div>
+      )}
+      {picked !== null && (
+        <button
+          onClick={next}
+          className="mt-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
+        >
+          {idx + 1 >= QUIZ.length ? "See results" : "Next →"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Learn() {
+  const [open, setOpen] = useState(0);
+  return (
+    <div className="space-y-3">
+      {LESSONS.map((l, i) => (
+        <div
+          key={i}
+          className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
+        >
+          <button
+            onClick={() => setOpen(open === i ? -1 : i)}
+            className="w-full flex items-center justify-between px-5 py-4 text-left"
+          >
+            <span className="font-semibold text-slate-900">{l.title}</span>
+            <span className="font-mono text-teal-700 text-lg">{open === i ? "−" : "+"}</span>
+          </button>
+          {open === i && (
+            <div className="px-5 pb-5">
+              <p className="text-slate-700 text-sm leading-relaxed mb-3">{l.body}</p>
+              <pre className="bg-slate-900 text-teal-50 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap">
+                {l.example}
+              </pre>
+              <p className="text-xs text-slate-500 mt-2">↳ {l.note}</p>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const TABS = [
+  { id: "learn", label: "Learn" },
+  { id: "bits", label: "Bit Lab" },
+  { id: "code", label: "Playground" },
+  { id: "quiz", label: "Quiz" },
+];
+
+function App() {
+  const [tab, setTab] = useState("learn");
+  return (
+    <div className="min-h-screen bg-slate-100" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
+      <header className="bg-slate-900 text-white">
+        <div className="max-w-3xl mx-auto px-5 py-8">
+          <div className="font-mono text-xs tracking-widest text-teal-400 uppercase mb-2">
+            Programming Foundations · Chapter 1
+          </div>
+          <h1 className="text-3xl font-bold mb-1">
+            Intro to Programming,{" "}
+            <span className="text-teal-400 font-mono">without the friction</span>
+          </h1>
+          <p className="text-slate-300 text-sm">
+            Everything from the zyBooks chapter — programs, variables, output, binary, Coral —
+            as short lessons, hands-on labs, and a quiz with instant feedback.
+          </p>
+        </div>
+      </header>
+
+      <nav className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-5 flex gap-1 overflow-x-auto">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-3 font-mono text-sm whitespace-nowrap border-b-2 transition-colors ${
+                tab === t.id
+                  ? "border-teal-600 text-teal-800 font-semibold"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <main className="max-w-3xl mx-auto px-5 py-8">
+        {tab === "learn" && <Learn />}
+        {tab === "bits" && <BitLab />}
+        {tab === "code" && <Playground />}
+        {tab === "quiz" && <Quiz />}
+      </main>
+
+      <footer className="max-w-3xl mx-auto px-5 pb-10 text-center text-xs text-slate-400">
+        Study companion for zyBooks Ch. 1 — use zyBooks to submit graded activities.
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
