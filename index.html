@@ -9,9 +9,9 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script>
-  // Force classic JSX runtime (React.createElement) so the inline
-  // script works without ES module imports. Babel 8 defaults to the
-  // automatic runtime, which emits an import and breaks this page.
+  // Force the classic JSX runtime (React.createElement) so this inline script
+  // works without ES module imports. Babel 8 defaults to the automatic runtime,
+  // which emits an `import` statement and breaks a plain <script type="text/babel">.
   Babel.registerPreset('react-classic', {
     presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
   });
@@ -20,9 +20,13 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react-classic">
-const { useState } = React;
+const { useState, useRef, useEffect } = React;
 
-// ---------- tiny Coral interpreter (chapter 1 subset) ----------
+// ============================================================
+//  Coral interpreter — Chapter 1 language subset
+//  Supports: integer declarations, assignments, math (+ - * /),
+//  Get next input, Put "string" / Put variable to output, // comments
+// ============================================================
 function runCoral(code, inputText) {
   const vars = {};
   const inputs = inputText.trim().length ? inputText.trim().split(/\s+/) : [];
@@ -37,11 +41,11 @@ function runCoral(code, inputText) {
     const n = i + 1;
     if (!line || line.startsWith("//")) continue;
 
-    // integer declaration
+    // integer declaration:  integer wage
     let m = line.match(/^integer\s+([A-Za-z][A-Za-z0-9]*)$/);
     if (m) { vars[m[1]] = 0; continue; }
 
-    // Put "string" to output
+    // Put "string literal" to output
     m = line.match(/^Put\s+"([^"]*)"\s+to\s+output$/);
     if (m) { output += m[1].replace(/\\n/g, "\n"); continue; }
 
@@ -92,147 +96,294 @@ function runCoral(code, inputText) {
   return { ok: true, output, vars };
 }
 
-// ---------- content ----------
+// ============================================================
+//  LEARN content — every section of the PDF (1.1 – 1.10)
+// ============================================================
 const LESSONS = [
-  {
-    title: "What a program is",
-    body:
-      "A program is a list of instructions that execute one at a time. Every instruction does one of three things: get INPUT (from a keyboard, file, etc.), PROCESS data (like computing x + y), or put OUTPUT somewhere (like the screen). That's it — every program you'll ever write is built from these three moves.",
-    example: 'x = Get next input\ny = Get next input\nz = x + y\nPut z to output',
-    note: "With inputs 2 and 5, this outputs 7.",
-  },
-  {
-    title: "Variables",
-    body:
-      'A variable is a name that holds a value — like a labeled box. It\'s called a "variable" because its value can vary: x = 7 puts 7 in the box, and x keeps holding 7 until something assigns it a new value. In Coral you declare one with "integer x" before using it.',
+  // ---------- 1.1 ----------
+  { sec: "1.1 Programming (general)", title: "What a program is",
+    body: "A computer program is a list of instructions that execute one at a time. Every instruction does one of three jobs: INPUT (get data from a keyboard, file, network...), PROCESS (compute something, like x + y), or OUTPUT (put data somewhere, like the screen). Every program you'll ever write is built from these three moves.",
+    example: "x = Get next input\ny = Get next input\nz = x + y\nPut z to output",
+    note: "MEMORY HOOK: Input → Process → Output = \"I.P.O.\" With inputs 2 and 5, this outputs 7." },
+  { sec: "1.1 Programming (general)", title: "Variables",
+    body: "A variable is a name that holds a value — like a labeled box. It's called a \"variable\" because its value can VARY: x = 7 puts 7 in the box, and x keeps 7 until something assigns it a new value.",
     example: "integer wage\nwage = 20",
-    note: "wage now holds 20.",
-  },
-  {
-    title: "Output & string literals",
-    body:
-      'Put "Salary is " to output prints text. Text in double quotes is a string literal. Put salary to output (no quotes!) prints the variable\'s VALUE. The special two-character sequence \\n moves the cursor to the next line — it\'s invisible in the output itself.',
-    example: 'Put "Keep calm" to output\nPut "\\n" to output\nPut "and carry on" to output',
-    note: "Prints two lines: 'Keep calm' then 'and carry on'.",
-  },
-  {
-    title: "Comments & whitespace",
-    body:
-      "A comment starts with // and is for humans only — the computer skips it completely. It must be on its own line in Coral. Whitespace (spaces, blank lines) is mostly ignored during execution, but consistent spacing like w = x + y makes code readable. Warning: whitespace in your OUTPUT is never ignored — graders check it exactly.",
-    example: "// Compute total pay\nw = x + y",
-    note: "The // line does nothing when the program runs.",
-  },
-  {
-    title: "Bits, binary & ASCII",
-    body:
-      "Everything in a computer is stored as bits — 0s and 1s. 8 bits make a byte. Numbers use binary (base 2): each digit is a power of 2, so 1100 = 8 + 4 = 12. Characters use ASCII codes: 'A' is 65 (1000001), 'a' is 97. Try both in the Bit Lab tab.",
-    example: "1100 in binary\n= 8 + 4 + 0 + 0\n= 12",
-    note: "Read binary right-to-left: 1, 2, 4, 8, 16...",
-  },
-  {
-    title: "Pseudocode & problem solving",
-    body:
-      "Pseudocode is text that looks like a program but is simplified for humans — one statement per line, no strict rules. Programming is really problem solving: design a methodical solution FIRST (like the sock-matching or name-tag-sorting examples), then translate it into code. The language is just how you write the recipe down.",
-    example: "get each tag\nplace into A–Z pile\nsort each small pile\nstack piles in order",
-    note: "This plan (like radix sort) beats one giant sorted stack.",
-  },
+    note: "The name 'variable' comes from the value 'varying'. wage now holds 20." },
+  { sec: "1.1 Programming (general)", title: "A program is like a recipe",
+    body: "A recipe is instructions a chef executes one at a time (add eggs, stir, bake). A program is instructions a computer executes one at a time (multiply numbers, output to screen). Same idea — an ordered list of steps.",
+    example: "Mix butter and sugar\nAdd egg, mix\nStir in flour\nBake 350F for 8 min",
+    note: "ORDER MATTERS: reorder the steps and you get a different result — same as code." },
+  { sec: "1.1 Programming (general)", title: "Algorithm & computational thinking",
+    body: "An algorithm is a sequence of instructions that solves a problem. Computational thinking means creating that sequence — breaking a task into precise steps. This skill matters far beyond coding.",
+    example: "To draw a square:\nrepeat 4 times:\n  forward 50\n  turn left 90",
+    note: "EXAM TRAP: 'algorithm' = the step-by-step solution, NOT the programming language it's written in." },
+  { sec: "1.1 Programming (general)", title: "Turtle graphics & decomposition",
+    body: "Turtle graphics teaches algorithms: you tell a 'turtle' to Pen down, Forward, and Turn left to draw shapes. Big tasks get DECOMPOSED into basic steps. 'Draw a square' becomes 8 tiny steps: pen down, forward, left 90, forward, left 90...",
+    example: "Pen down\nForward 50\nLeft 90\nForward 50\nLeft 90\nForward 50\nLeft 90\nForward 50",
+    note: "Try it in the Labs tab → Turtle Graphics. Decomposition = breaking a task into its most basic steps." },
+
+  // ---------- 1.2 ----------
+  { sec: "1.2 Programming basics", title: "Flowcharts, statements, nodes & the interpreter",
+    body: "A FLOWCHART is a graphical way to write a program. This course uses the Coral language. A program is a list of STATEMENTS (each does one action). In a flowchart each statement sits in a NODE (a shape). An INTERPRETER runs the statements — 'run' and 'execute' mean the same thing.",
+    example: "Start → wage = 20 → salary = wage*40*52\n→ Put \"Salary is \" → Put salary → End",
+    note: "KEYWORDS: statement = one action · node = one shape · interpreter = the tool that runs it." },
+  { sec: "1.2 Programming basics", title: "Flowchart shapes",
+    body: "Different statements use different shapes. OVAL = Start / End. PARALLELOGRAM = input OR output. RECTANGLE = a process step (like a calculation). Execution begins at Start and flows down, one node at a time.",
+    example: "( Start )   ← oval\n[ salary = wage*52 ]  ← rectangle (process)\n/ Put x to output /  ← parallelogram (I/O)",
+    note: "MEMORY HOOK: paralleloGRAM = Get/Give data (I/O). Oval = the ends. Rectangle = 'do' a calc." },
+  { sec: "1.2 Programming basics", title: "Getting input",
+    body: "An input statement is written variable = Get next input. It assigns the variable with the NEXT value waiting in the program's input. Each Get next input consumes one value, in order.",
+    example: "wage = Get next input\nsalary = wage * 40 * 52",
+    note: "EXAM TRAP: with input '22 77', the first Get gets 22, the second gets 77 — always in order." },
+  { sec: "1.2 Programming basics", title: "Output & string literals",
+    body: "Put \"Salary is \" to output prints text. Text in double quotes is a STRING LITERAL — any letters, digits, or symbols. Put salary to output (NO quotes) prints the variable's VALUE. A CURSOR marks where the next output goes; it auto-moves to the end of what was printed.",
+    example: "Put \"Keep calm\" to output\nPut \"\\n\" to output\nPut \"and carry on\" to output",
+    note: "Quotes = literal text. No quotes = a variable's value. \" \" (a space) is still a valid string literal." },
+  { sec: "1.2 Programming basics", title: "The newline \\n",
+    body: "\\n is a special two-character sequence that moves the cursor to the next line. It's INVISIBLE in the output itself — you only see its effect. Two \\n's in a row make a blank line.",
+    example: "Put \"a\\nb\\nc\" to output",
+    note: "Output is a, b, c on three separate lines. \\n never prints as the letters n." },
+
+  // ---------- 1.3 ----------
+  { sec: "1.3 Comments & whitespace", title: "Comments",
+    body: "A comment is text for HUMANS only — the computer skips it entirely when running. In Coral a comment starts with // and runs to the end of that line. It must be on its OWN line.",
+    example: "// Compute total pay\nsalary = wage * 40 * 52",
+    note: "EXAM TRAP: // must be exactly two forward slashes. '/ text' or '\\\\ text' are INVALID comments." },
+  { sec: "1.3 Comments & whitespace", title: "Whitespace",
+    body: "Whitespace = spaces, tabs, and newlines between items. For execution, most whitespace is IGNORED, so w=x+y and w = x + y compute the same. Good practice: exactly one space around each operator for readability.",
+    example: "w=x+y+z\nw    =   x +y+  z\nw = x + y + z   // most readable",
+    note: "EXAM TRAP: you can't put a space INSIDE a name or number. 'num Cars' and '2 5' are invalid." },
+
+  // ---------- 1.4 ----------
+  { sec: "1.4 Brief history", title: "From switches to chips",
+    body: "Computers grew out of telephone switches in the early 1900s: switch ON = 1, OFF = 0. The first computers (1940s) had thousands of switches and filled entire rooms, used for military tasks like WWII codebreaking. By the 1970s a whole computer fit on one coin-sized chip.",
+    example: "ON  = 1\nOFF = 0",
+    note: "Early computers = room-sized. Today that same power fits on a chip smaller than a pinhead." },
+  { sec: "1.4 Brief history", title: "Moore's Law",
+    body: "Engineers have shrunk switch sizes by half about every two years — a trend called Moore's Law. Halving repeatedly is dramatic (you can't fold a paper in half more than ~7 times). This is why computers got tiny and cheap so fast.",
+    example: "size: 100% → 50% → 25% → 12.5% ...\n(every ~2 years)",
+    note: "MEMORY HOOK: Moore = MORE switches, half the size, every 2 years." },
+  { sec: "1.4 Brief history", title: "The information age",
+    body: "The agricultural age lasted thousands of years. The industrial age (late 1700s) brought factories, cities, and a population explosion. The information age began only in the 1990s — shifting work toward creating and managing computerized information. It's brand new and still transforming society.",
+    example: "Agricultural → Industrial (1700s)\n→ Information (1990s → now)",
+    note: "EXAM TRAP: the information age is only a few decades old, NOT 100 years, and NOT nearly complete." },
+
+  // ---------- 1.5 ----------
+  { sec: "1.5 Computers all around us", title: "Computers everywhere",
+    body: "1940s-50s computers were rare, cost millions, weighed a ton, and filled rooms. Chips (invented in the 1950s) keep gaining switches and dropping in price. Businesses bought computers in the 60s-70s, homes got desktops/laptops in the 80s, and the 2000s brought tablets, e-readers, and smartphones.",
+    example: "1950s: a few, room-sized\n1980s: home desktops\n2000s: smartphones",
+    note: "Desktop sales are FALLING each year; smartphones are the most popular type." },
+  { sec: "1.5 Computers all around us", title: "Embedded computers",
+    body: "An embedded computer is a computer INSIDE another device — a TV, car, printer, thermostat, satellite, even a smart pill. They run on special chips called microcontrollers. Embedded computers vastly outnumber desktops and laptops.",
+    example: "Car, TV, microwave, ATM,\nthermostat, MRI machine...",
+    note: "EXAM TRAP: 'embedded' means inside another device — NOT a computer inside a desktop/laptop." },
+
+  // ---------- 1.6 ----------
+  { sec: "1.6 Representing information as bits", title: "Bits & bytes",
+    body: "A computer is built from switches that are ON (1) or OFF (0). A single 0 or 1 is a BIT. Eight bits (like 11000101) are a BYTE. ALL data — numbers, letters, symbols, images, audio, video — is stored as bits.",
+    example: "1011  → 4 bits\n11000101 → 8 bits = 1 byte",
+    note: "MEMORY HOOK: BInary digiT = BIT. 8 bits = 1 byte (a 'bite' of 8)." },
+  { sec: "1.6 Representing information as bits", title: "Binary numbers",
+    body: "Humans use base-10 (decimal) because we have 10 fingers. Computers use base-2 (binary) because switches have 2 states. Each binary digit is a power of two: 128, 64, 32, 16, 8, 4, 2, 1. The value is the sum of the weights where the bit is 1.",
+    example: "1100 = 8 + 4 = 12\n0111 = 4 + 2 + 1 = 7",
+    note: "8 bits represent 0 to 255. Read weights right-to-left: 1, 2, 4, 8, 16... Try the Binary Builder in Labs." },
+  { sec: "1.6 Representing information as bits", title: "ASCII & Unicode",
+    body: "A CHARACTER is any letter, digit, or symbol. ASCII (American Standard Code for Information Interchange, 1963) gives each character a unique 7-bit code — 128 characters total. 'A' is 65 (100 0001), 'a' is 97. UNICODE (1991) uses more bits and covers 100,000+ characters, including non-English and symbols.",
+    example: "'A' = 1000001 = 65\n'a' = 1100001 = 97\n'Z' = 1011010 = 90",
+    note: "EXAM TRAP: upper and lower case are DIFFERENT codes. ASCII = 7 bits/128 chars; Unicode = way more." },
+
+  // ---------- 1.7 ----------
+  { sec: "1.7 Problem solving", title: "Problem solving comes first",
+    body: "Knowing English doesn't make you a chef; knowing a language doesn't make you a programmer. Programming is mostly PROBLEM SOLVING — creating a methodical solution to a task. Design the solution approach FIRST, then write the code.",
+    example: "1. Understand the problem\n2. Design a solution approach\n3. THEN write the program",
+    note: "The language is just how you write the recipe down. The thinking is the real work." },
+  { sec: "1.7 Problem solving", title: "Matching socks",
+    body: "Three sock types in a drawer. Pulling two, checking, and putting back if they don't match could repeat forever. Better approach: pull socks one at a time and KEEP them — with 3 types, by the 4th sock you must have a matching pair.",
+    example: "Pull, keep, repeat.\n3 types → 4th sock guarantees a pair",
+    note: "A smarter solution approach beats brute force. This is the 'pigeonhole' idea." },
+  { sec: "1.7 Problem solving", title: "Sorting name tags (radix sort)",
+    body: "To sort 1000 tags by last name: inserting each into one growing sorted stack gets slow. Faster: drop each into 26 sub-stacks (A, B, C...), sort each small stack, then combine A-Z. Small stacks are quick to sort. This mirrors a real algorithm called radix sort.",
+    example: "1000 tags → 26 letter stacks\n→ sort each → combine in order",
+    note: "Divide-and-conquer: many small easy jobs beat one giant hard job." },
+
+  // ---------- 1.8 ----------
+  { sec: "1.8 Why programming", title: "Computing careers",
+    body: "Computing jobs rank among the best for salary, growth, security, and satisfaction. In a 2022 ranking, information security analyst (cybersecurity) was #1 and software developer was #5. Exact ranks shift yearly, but computing jobs consistently sit in the top tier. Nearly all require some programming.",
+    example: "#1 Information security analyst\n#5 Software developer\n#6 Data scientist",
+    note: "Rankings use MULTIPLE factors (salary + growth + work-life balance), not just one." },
+  { sec: "1.8 Why programming", title: "Programming helps non-coding jobs too",
+    body: "You don't need a computing title to benefit. A chemist wrote custom analysis scripts; a technical writer automated team tasks with small add-ons; a business grad automated SQL reports; an environmental-science grad made a company website interactive. A little programming is a career multiplier.",
+    example: "Chemist → analysis scripts\nWriter → Docs add-ons\nSales → SQL reports",
+    note: "Even in non-computing careers, a bit of code can set you apart (like your own FocusKai builds)." },
+  { sec: "1.8 Why programming", title: "Precision & logic (computational thinking)",
+    body: "Programming forces precise, logical thought. Programmers use ONE unique name per thing (no synonyms or pronouns) and IF-ELSE statements to handle cases cleanly. English is often vague or contradictory; code can't be. This 'computational thinking' improves your writing and reasoning everywhere.",
+    example: "If distance < 25: taxi or drive\nElse if 25..300: drive only\nElse if > 300: drive or fly",
+    note: "Vague policies hide gaps (what about exactly 25 miles?). If-else forces you to cover every case." },
+  { sec: "1.8 Why programming", title: "Struggling is normal",
+    body: "Programming is unlike most things people have done: one wrong symbol can break everything, and it's a SKILL that needs practice, not just facts to memorize. Like learning piano or walking, you'll stumble a lot. Everyone does — even pros (a 2012 software bug fired 17 minutes of San Diego fireworks in seconds).",
+    example: "watch piano ≠ play piano\npractice → mistakes → skill",
+    note: "YOU-MISSED-THIS: struggling doesn't mean you're bad at it or the teaching failed. It's the process." },
+
+  // ---------- 1.9 ----------
+  { sec: "1.9 Why whitespace matters", title: "Output whitespace must match exactly",
+    body: "In graded labs, your program's output must match the expected output EXACTLY — including spaces and newlines. 'My code is right but it complains about whitespace' usually means the output really is wrong. Correct formatting IS part of correctness.",
+    example: "Expected:  \"  NO PARKING\\n1:00 - 5:00 a.m.\"\n(note the TWO leading spaces)",
+    note: "A missing newline makes the next line run on; a missing space jams words together." },
+  { sec: "1.9 Why whitespace matters", title: "Programming is all about precision",
+    body: "Tiny details change everything: = (assign) vs == (compare); using i where you meant j; int vs char; forgetting n could be 0 in sum/n; x/2 vs x/2.0; i < 10 vs i <= 10. Great programmers build a habit of extreme attention to detail — caring about whitespace trains that mindset.",
+    example: "=  assigns      ==  compares\nx/2 vs x/2.0    i<10 vs i<=10",
+    note: "EXAM TRAP: = and == mean different things. Every symbol counts." },
+
+  // ---------- 1.10 ----------
+  { sec: "1.10 Code & pseudocode", title: "Pseudocode",
+    body: "Pseudocode is text that resembles a program but is simplified for humans — 'pseudo' means 'similar to'. Usually one line per statement. It skips strict rules to be easy to read and write, and it's more compact than a flowchart, especially for big programs. It's for PEOPLE, not machines.",
+    example: "wage = 20\nsalary = wage * 40 * 52\nPut \"Salary is \" to output\nPut salary to output",
+    note: "EXAM TRAP: pseudocode is informal and TEXTUAL, meant for humans — not executed by a machine." },
+  { sec: "1.10 Code & pseudocode", title: "Coral: flowchart AND code",
+    body: "Coral comes in two matching versions: a graphical FLOWCHART and text CODE. Coral code looks like pseudocode but follows exact rules so it can actually run. The built-in simulator runs your code and auto-draws the matching flowchart.",
+    example: "integer wage\nwage = Get next input\nsalary = wage * 40 * 52\nPut salary to output",
+    note: "Real text languages like C, C++, Java, Python are stricter than pseudocode — Coral bridges the two." },
 ];
 
+// ============================================================
+//  QUIZ — pulled from the chapter's participation & challenge activities
+// ============================================================
 const QUIZ = [
-  {
-    q: "Consider z = x + y. If x is 10 and y is 20, z is assigned with ____.",
-    options: ["10", "30", "1020", "Error"],
-    answer: 1,
-    why: "The process step computes 10 + 20 and stores the result, 30, in z.",
-  },
-  {
-    q: "A program's execution begins at the ____ node.",
-    options: ["Begin", "Input", "Start", "Run"],
-    answer: 2,
-    why: "Every Coral flowchart begins at the Start node and flows downward.",
-  },
-  {
-    q: "A program's statements execute ____.",
-    options: ["all at once", "sequentially", "randomly", "in reverse"],
-    answer: 1,
-    why: "One at a time, top to bottom — that's the core idea of a program.",
-  },
-  {
-    q: "Given variable numCars = 9, which statement outputs 9?",
-    options: [
-      'Put "numCars" to output',
-      "Get numCars to output",
-      "Put numCars to output",
-    ],
-    answer: 2,
-    why: 'No quotes = the variable\'s value. With quotes, it would literally print the text "numCars".',
-  },
-  {
-    q: "In a Coral flowchart, what shape is used for an input or output statement?",
-    options: ["Oval", "Rectangle", "Diamond", "Parallelogram"],
-    answer: 3,
-    why: "Parallelograms are input/output; rectangles are processing; ovals are Start/End.",
-  },
-  {
-    q: 'What does Put "a\\nb\\nc" to output print?',
-    options: ["anbnc", "a b c on one line", "a, b, c each on their own line", "Error"],
-    answer: 2,
-    why: "Each \\n is a newline — the cursor drops to the next line, so you get three lines.",
-  },
-  {
-    q: "x = Get next input, then y = Get next input. Program input is: 22 77. What happens?",
-    options: ["x gets 22, y gets 77", "x gets 77, y gets 22", "both get 22"],
-    answer: 0,
-    why: "Each input statement consumes the NEXT value in order.",
-  },
-  {
-    q: "What is binary 1100 as a decimal number?",
-    options: ["3", "12", "24", "1100"],
-    answer: 1,
-    why: "From the left: 8 + 4 + 0 + 0 = 12.",
-  },
-  {
-    q: "What is 7 as a 4-bit binary number?",
-    options: ["1110", "0101", "0111", "1000"],
-    answer: 2,
-    why: "7 = 4 + 2 + 1, so the 4, 2, and 1 bits are on: 0111.",
-  },
-  {
-    q: "Eight bits are called a ____.",
-    options: ["bit", "nibble", "byte", "word"],
-    answer: 2,
-    why: "8 bits = 1 byte, like 11000101.",
-  },
-  {
-    q: "Is this a valid Coral comment?  // Determine total //",
-    options: ["Valid", "Invalid"],
-    answer: 0,
-    why: "Everything after the first // on the line is the comment — extra slashes are just part of it.",
-  },
-  {
-    q: "Assuming y is 3 and z is 5, what does x get in:  x =y+z",
-    options: ["8", "35", "Error — bad spacing"],
-    answer: 0,
-    why: "Whitespace between items is ignored during execution, so this is just x = y + z = 8.",
-  },
-  {
-    q: "Is  num Cars = 2 5  a valid statement?",
-    options: ["Yes, numCars gets 25", "No — Error"],
-    answer: 1,
-    why: "You can't put a space INSIDE a name or a number. 'num Cars' and '2 5' aren't valid items.",
-  },
-  {
-    q: "A comment in a program is ____.",
-    options: [
-      "executed first",
-      "read by humans, ignored by the computer",
-      "required on every line",
-    ],
-    answer: 1,
-    why: "Comments explain intent to people. Execution skips them entirely.",
-  },
+  // 1.1
+  { q: "Consider z = x + y. If x is 10 and y is 20, z is assigned with ____.",
+    options: ["10", "30", "1020", "Error"], answer: 1,
+    why: "The process step computes 10 + 20 and stores 30 in z." },
+  { q: "A sequence of instructions that solves a problem is called a(n) ____.",
+    options: ["variable", "algorithm", "byte", "flowchart"], answer: 1,
+    why: "An algorithm is a step-by-step solution to a problem — the heart of computational thinking." },
+  { q: "To complete a program that computes a triangle's area (x = base * height), the missing step is:",
+    options: ["Multiply x by 2", "Add 2 to x", "Multiply x by 1/2"], answer: 2,
+    why: "Triangle area = base × height ÷ 2, so multiply the base*height product by 1/2." },
+  { q: "Turtle steps: Pen down, Forward 50, Left 90, Forward 50, Left 90, Forward 50, Left 90, Forward 50 draws a ____.",
+    options: ["triangle", "square", "circle", "line"], answer: 1,
+    why: "Four equal sides with 90° turns between them make a square." },
+  // 1.2
+  { q: "A program's execution begins at the ____ node.",
+    options: ["Begin", "Input", "Start", "Run"], answer: 2,
+    why: "Every Coral flowchart begins at the Start node and flows downward." },
+  { q: "A program's statements execute ____.",
+    options: ["all at once", "sequentially", "randomly", "in reverse"], answer: 1,
+    why: "One at a time, top to bottom — the core idea of a program." },
+  { q: "In a Coral flowchart, what shape represents an input OR output statement?",
+    options: ["Oval", "Rectangle", "Diamond", "Parallelogram"], answer: 3,
+    why: "Parallelograms are input/output; rectangles are processing; ovals are Start/End." },
+  { q: "Which statement assigns variable numCars with the next input value?",
+    options: ["x = Get next input", "numCars = 20", "numCars = Get next input"], answer: 2,
+    why: "'variable = Get next input' reads the next input value into that variable." },
+  { q: "x = Get next input, then y = Get next input. The input is: 22 77. What happens?",
+    options: ["x gets 22, y gets 77", "x gets 77, y gets 22", "both get 22"], answer: 0,
+    why: "Each input statement consumes the NEXT value in order: 22 then 77." },
+  { q: "Which of these is a valid string literal?",
+    options: ["Have a nice day", "\" \"", "Hello (no quotes)"], answer: 1,
+    why: "A string literal is text inside double quotes. Even \" \" (a single space) counts. No quotes = not a literal." },
+  { q: "What does Put How are you? to output produce (note: no quotes)?",
+    options: ["How are you?", "(Error)", "\"How are you?\""], answer: 1,
+    why: "Output text must be a string literal in quotes, or a variable. Bare text with no quotes is an error." },
+  { q: 'What does Put "a\\nb\\nc" to output print?',
+    options: ["anbnc", "a b c on one line", "a, b, c each on their own line", "Error"], answer: 2,
+    why: "Each \\n is a newline, so the cursor drops down — three lines." },
+  { q: "Given numCars = 9, which statement outputs 9?",
+    options: ['Put "numCars" to output', "Get numCars to output", "Put numCars to output"], answer: 2,
+    why: "No quotes = the variable's value (9). With quotes it would print the text numCars." },
+  { q: "Each rectangle or parallelogram in a flowchart contains one ____.",
+    options: ["value", "statement", "variable"], answer: 1,
+    why: "Each node holds exactly one statement (one action)." },
+  // 1.3
+  { q: "Is this a valid Coral comment?   // Determine total //",
+    options: ["Valid", "Invalid"], answer: 0,
+    why: "Everything after the first // is the comment; extra slashes are just part of the text." },
+  { q: "Is this a valid Coral comment?   / Get time from user",
+    options: ["Valid", "Invalid"], answer: 1,
+    why: "A comment needs TWO forward slashes (//). A single / is invalid." },
+  { q: "Assuming y is 3 and z is 5, what does x get in:   x =y+z",
+    options: ["8", "35", "Error — bad spacing"], answer: 0,
+    why: "Whitespace between items is ignored, so this is just x = y + z = 8." },
+  { q: "Is   num Cars = 2 5   a valid statement?",
+    options: ["Yes, numCars gets 25", "No — Error"], answer: 1,
+    why: "You can't put a space inside a name or a number. 'num Cars' and '2 5' aren't valid items." },
+  // 1.4
+  { q: "Reducing switch sizes by half about every two years is known as ____.",
+    options: ["Binary Law", "Moore's Law", "ASCII", "the information age"], answer: 1,
+    why: "Moore's Law describes switches (transistors) halving in size roughly every 2 years." },
+  { q: "The information age has covered about 100 years.",
+    options: ["True", "False"], answer: 1,
+    why: "It began only in the 1990s — just a few decades ago." },
+  { q: "For many thousands of years, most humans lived as farmers (the agricultural age).",
+    options: ["True", "False"], answer: 0,
+    why: "The agricultural age lasted thousands of years before the industrial age." },
+  // 1.5
+  { q: "An embedded computer is a computer inside a desktop or laptop.",
+    options: ["True", "False"], answer: 1,
+    why: "Embedded means inside ANOTHER device — a car, TV, thermostat — not inside a PC." },
+  { q: "Which is more popular today?",
+    options: ["Desktops", "Smartphones", "Tablets"], answer: 1,
+    why: "Smartphones far outsell desktops and tablets; desktop use keeps falling." },
+  // 1.6
+  { q: "A single 0 or 1 is called a ____.",
+    options: ["byte", "bit", "nibble", "digit"], answer: 1,
+    why: "A single binary digit (0 or 1) is a bit. Eight bits make a byte." },
+  { q: "How many bits are in 101100?",
+    options: ["4", "5", "6", "8"], answer: 2,
+    why: "Count the digits: 1-0-1-1-0-0 = 6 bits." },
+  { q: "What is binary 1100 as a decimal number?",
+    options: ["3", "12", "24", "1100"], answer: 1,
+    why: "From the left: 8 + 4 + 0 + 0 = 12." },
+  { q: "What is 7 as a 4-bit binary number?",
+    options: ["1110", "0101", "0111", "1000"], answer: 2,
+    why: "7 = 4 + 2 + 1, so bits 4, 2, 1 are on: 0111." },
+  { q: "ASCII uses how many bits per character code?",
+    options: ["4", "7", "8", "16"], answer: 1,
+    why: "ASCII uses 7 bits, giving 128 possible characters. Unicode uses more." },
+  { q: "The 7-bit ASCII codes for 'A' (65) and 'a' (97) are the same.",
+    options: ["True", "False"], answer: 1,
+    why: "Upper and lower case are DIFFERENT characters with different codes." },
+  // 1.7
+  { q: "Three sock types are pulled one at a time and kept. After pulling A, B, C, the 4th sock must match one of them.",
+    options: ["True", "False"], answer: 0,
+    why: "With only 3 types, a 4th sock has to repeat one you already hold — a guaranteed pair." },
+  { q: "Sorting 1000 name tags by dropping them into 26 letter stacks first, then sorting each, resembles which real algorithm?",
+    options: ["binary search", "radix sort", "turtle graphics"], answer: 1,
+    why: "Bucketing by letter then sorting each bucket is the idea behind radix sort." },
+  // 1.8
+  { q: "The '2022 best jobs' rankings were based on what?",
+    options: ["Salary only", "Job security only", "Multiple factors (salary, growth, work-life balance)"], answer: 2,
+    why: "Rankings combine several factors, not just one." },
+  { q: "Software developers spend nearly all their time alone at a computer.",
+    options: ["True", "False"], answer: 1,
+    why: "Developers often work in teams, combining creativity and technical skill." },
+  { q: "A survey asks: minutes spent? __Under 5  __6 or more. What's wrong?",
+    options: ["Nothing", "Exactly 5 minutes is not a choice", "It should say 'more than 6'"], answer: 1,
+    why: "The gap: 5 (and the range 5-6) fits neither option — imprecise categories. This is computational thinking." },
+  // 1.9
+  { q: "Whitespace ____ important in program output.",
+    options: ["is", "is not"], answer: 0,
+    why: "Graded output must match exactly, including spaces and newlines." },
+  { q: "In programming, = and == mean the same thing.",
+    options: ["True", "False"], answer: 1,
+    why: "= assigns a value; == compares two values. Confusing them is a classic bug." },
+  { q: "A program's output is missing a newline at the end of a line. The likely effect:",
+    options: ["No effect", "The next text runs onto the same line", "The program crashes"], answer: 1,
+    why: "Without a newline, following text appears on the same line — messy, unprofessional output." },
+  // 1.10
+  { q: "Pseudocode is intended primarily for machines to read and execute.",
+    options: ["True", "False"], answer: 1,
+    why: "Pseudocode is an INFORMAL, textual description for HUMANS. It isn't executed." },
+  { q: "In the pseudocode: wage=20 / salary=wage*40*52 / Put \"Salary is\" / Put salary — how many statements?",
+    options: ["1", "3", "4"], answer: 2,
+    why: "One statement per line: four lines = four statements." },
+  { q: "Each program statement either gets input, ____ data, or puts output.",
+    options: ["counts", "processes", "throws away"], answer: 1,
+    why: "The three jobs are input, PROCESS, and output." },
 ];
 
+// ============================================================
+//  DEFAULT PLAYGROUND CODE + example programs
+// ============================================================
 const DEFAULT_CODE = `integer wage
 integer salary
 
@@ -241,7 +392,72 @@ salary = wage * 40 * 52
 Put "Salary is " to output
 Put salary to output`;
 
-// ---------- components ----------
+const EXAMPLES = [
+  { name: "Salary", input: "25", code: DEFAULT_CODE },
+  { name: "Add two inputs", input: "2 5",
+    code: `integer x\ninteger y\ninteger z\nx = Get next input\ny = Get next input\nz = x + y\nPut z to output` },
+  { name: "Dog years", input: "3",
+    code: `integer dogYears\ninteger humanYears\ndogYears = Get next input\nhumanYears = 7 * dogYears\nPut "A " to output\nPut dogYears to output\nPut " year old dog is about a " to output\nPut humanYears to output\nPut " year old human." to output` },
+  { name: "Hello World! (Lab 1.12)", input: "",
+    code: `Put "Hello World!" to output` },
+  { name: "No parking (Lab 1.13)", input: "",
+    code: `Put "  NO PARKING\\n" to output\nPut "1:00 - 5:00 a.m." to output` },
+];
+
+// ============================================================
+//  COMPONENTS
+// ============================================================
+function SectionHead({ children }) {
+  return (
+    <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">{children}</h3>
+  );
+}
+
+function Learn() {
+  const [open, setOpen] = useState("What a program is");
+  // group lessons by section
+  const groups = [];
+  LESSONS.forEach((l) => {
+    let g = groups.find((x) => x.sec === l.sec);
+    if (!g) { g = { sec: l.sec, items: [] }; groups.push(g); }
+    g.items.push(l);
+  });
+  return (
+    <div className="space-y-6">
+      <p className="text-slate-600 text-sm bg-teal-50 border border-teal-200 rounded-xl p-3">
+        Every section of the zyBooks chapter (1.1 – 1.10) is here as short cards. Tap a card to expand.
+        Labs and graded-lab practice are in the other tabs.
+      </p>
+      {groups.map((g) => (
+        <div key={g.sec}>
+          <div className="font-mono text-xs tracking-widest uppercase text-slate-400 mb-2 mt-2">{g.sec}</div>
+          <div className="space-y-3">
+            {g.items.map((l) => (
+              <div key={l.title} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <button
+                  onClick={() => setOpen(open === l.title ? "" : l.title)}
+                  className="w-full flex items-center justify-between px-5 py-4 text-left"
+                >
+                  <span className="font-semibold text-slate-900">{l.title}</span>
+                  <span className="font-mono text-teal-700 text-lg">{open === l.title ? "−" : "+"}</span>
+                </button>
+                {open === l.title && (
+                  <div className="px-5 pb-5">
+                    <p className="text-slate-700 text-sm leading-relaxed mb-3">{l.body}</p>
+                    <pre className="bg-slate-900 text-teal-50 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap">{l.example}</pre>
+                    <p className="text-xs text-slate-500 mt-2">↳ {l.note}</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- Binary + ASCII lab ----------
 function BitLab() {
   const [bits, setBits] = useState([0, 0, 0, 0, 0, 0, 0, 0]);
   const [ch, setCh] = useState("A");
@@ -252,28 +468,18 @@ function BitLab() {
   return (
     <div className="space-y-8">
       <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
-        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
-          Binary builder
-        </h3>
+        <SectionHead>Binary builder</SectionHead>
         <p className="text-slate-600 text-sm mb-4">
-          Tap bits on and off. The decimal value is the sum of the weights of the 1s.
-          Can you make your age? Can you make 255?
+          Tap bits on and off. The decimal value is the sum of the weights of the 1s. Make your age. Make 255.
         </p>
         <div className="flex flex-wrap gap-2 justify-center mb-4">
           {bits.map((b, i) => (
-            <button
-              key={i}
+            <button key={i}
               onClick={() => setBits(bits.map((x, j) => (j === i ? 1 - x : x)))}
               className={`w-14 rounded-xl border-2 py-2 text-center transition-colors ${
-                b
-                  ? "bg-teal-600 border-teal-700 text-white"
-                  : "bg-slate-50 border-slate-300 text-slate-400"
-              }`}
-            >
+                b ? "bg-teal-600 border-teal-700 text-white" : "bg-slate-50 border-slate-300 text-slate-400"}`}>
               <div className="text-2xl font-mono font-bold">{b}</div>
-              <div className={`text-xs ${b ? "text-teal-100" : "text-slate-400"}`}>
-                {weights[i]}
-              </div>
+              <div className={`text-xs ${b ? "text-teal-100" : "text-slate-400"}`}>{weights[i]}</div>
             </button>
           ))}
         </div>
@@ -282,33 +488,22 @@ function BitLab() {
           <span className="font-mono text-4xl font-bold text-slate-900">{decimal}</span>
         </div>
         <div className="text-center mt-2 text-xs text-slate-500 font-mono">
-          {bits.filter(Boolean).length > 0
-            ? weights.filter((_, i) => bits[i]).join(" + ") + " = " + decimal
-            : "all bits off = 0"}
+          {bits.filter(Boolean).length > 0 ? weights.filter((_, i) => bits[i]).join(" + ") + " = " + decimal : "all bits off = 0"}
         </div>
       </section>
 
       <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
-        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
-          ASCII lookup
-        </h3>
-        <p className="text-slate-600 text-sm mb-4">
-          Every character on your keyboard has a 7-bit code. Type one:
-        </p>
+        <SectionHead>ASCII lookup</SectionHead>
+        <p className="text-slate-600 text-sm mb-4">Every character has a 7-bit code. Type one:</p>
         <div className="flex items-center gap-4 flex-wrap">
-          <input
-            value={ch}
-            maxLength={1}
+          <input value={ch} maxLength={1}
             onChange={(e) => setCh(e.target.value.slice(-1))}
-            className="w-16 h-16 text-center text-3xl font-mono border-2 border-slate-300 rounded-xl focus:border-teal-600 focus:outline-none"
-          />
+            className="w-16 h-16 text-center text-3xl font-mono border-2 border-slate-300 rounded-xl focus:border-teal-600 focus:outline-none" />
           {code !== null && (
             <div className="flex gap-6">
               <div>
-                <div className="text-xs text-slate-500 uppercase tracking-wide">bit code</div>
-                <div className="font-mono text-xl font-bold text-slate-900">
-                  {code.toString(2).padStart(7, "0")}
-                </div>
+                <div className="text-xs text-slate-500 uppercase tracking-wide">bit code (7-bit)</div>
+                <div className="font-mono text-xl font-bold text-slate-900">{code.toString(2).padStart(7, "0")}</div>
               </div>
               <div>
                 <div className="text-xs text-slate-500 uppercase tracking-wide">decimal</div>
@@ -318,155 +513,381 @@ function BitLab() {
           )}
         </div>
         <p className="text-xs text-slate-500 mt-3">
-          Try 'A' (65) vs 'a' (97) — upper and lower case have different codes. A space is a
-          character too (32).
+          Try 'A' (65) vs 'a' (97) — different codes. A space is a character too (32).
         </p>
       </section>
     </div>
   );
 }
 
+// ---------- Turtle graphics lab ----------
+const TRIANGLE = [
+  { op: "penDown" }, { op: "forward", val: 100 }, { op: "left", val: 120 },
+  { op: "forward", val: 100 }, { op: "left", val: 120 }, { op: "forward", val: 100 },
+];
+const SQUARE = [
+  { op: "penDown" }, { op: "forward", val: 90 }, { op: "left", val: 90 },
+  { op: "forward", val: 90 }, { op: "left", val: 90 }, { op: "forward", val: 90 },
+  { op: "left", val: 90 }, { op: "forward", val: 90 },
+];
+const OP_LABEL = { penUp: "Pen up", penDown: "Pen down", forward: "Forward", left: "Left" };
+
+function TurtleLab() {
+  const [ins, setIns] = useState(TRIANGLE);
+  const canvasRef = useRef(null);
+
+  const draw = (list) => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(0, 0, W, H);
+
+    let x = 0, y = 0, ang = 0, pen = true;
+    const segs = [];
+    const xs = [0], ys = [0];
+    list.forEach((s) => {
+      if (s.op === "penUp") pen = false;
+      else if (s.op === "penDown") pen = true;
+      else if (s.op === "left") ang += s.val || 0;
+      else if (s.op === "forward") {
+        const nx = x + Math.cos((ang * Math.PI) / 180) * (s.val || 0);
+        const ny = y + Math.sin((ang * Math.PI) / 180) * (s.val || 0);
+        segs.push({ x1: x, y1: y, x2: nx, y2: ny, pen });
+        x = nx; y = ny; xs.push(nx); ys.push(ny);
+      }
+    });
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 30;
+    const spanX = maxX - minX || 1, spanY = maxY - minY || 1;
+    const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    const tx = (px) => pad + (px - minX) * scale;
+    const ty = (py) => H - (pad + (py - minY) * scale); // invert y so 'left' looks counter-clockwise
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#0d9488";
+    segs.forEach((sg) => {
+      if (!sg.pen) return;
+      ctx.beginPath();
+      ctx.moveTo(tx(sg.x1), ty(sg.y1));
+      ctx.lineTo(tx(sg.x2), ty(sg.y2));
+      ctx.stroke();
+    });
+    // start dot
+    ctx.fillStyle = "#f43f5e";
+    ctx.beginPath();
+    ctx.arc(tx(0), ty(0), 4, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  useEffect(() => { draw(ins); }, []); // draw initial triangle on mount
+
+  const add = (op) => {
+    const item = op === "forward" ? { op, val: 50 } : op === "left" ? { op, val: 90 } : { op };
+    setIns([...ins, item]);
+  };
+  const remove = (i) => setIns(ins.filter((_, j) => j !== i));
+  const move = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= ins.length) return;
+    const copy = ins.slice();
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+    setIns(copy);
+  };
+  const setVal = (i, v) => setIns(ins.map((s, j) => (j === i ? { ...s, val: Number(v) || 0 } : s)));
+
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Turtle graphics</SectionHead>
+      <p className="text-slate-600 text-sm mb-4">
+        Build an algorithm step by step, then draw it. This is decomposition: a shape broken into basic moves.
+        Left turns are counter-clockwise. Try turning the triangle into a square.
+      </p>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {["penDown", "penUp", "forward", "left"].map((op) => (
+          <button key={op} onClick={() => add(op)}
+            className="bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold px-3 py-1.5 rounded-lg">
+            + {OP_LABEL[op]}
+          </button>
+        ))}
+        <button onClick={() => setIns(TRIANGLE)} className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-3 py-1.5 rounded-lg">Triangle</button>
+        <button onClick={() => setIns(SQUARE)} className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-3 py-1.5 rounded-lg">Square</button>
+        <button onClick={() => setIns([])} className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-3 py-1.5 rounded-lg">Clear</button>
+      </div>
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="md:w-1/2 space-y-1.5">
+          {ins.length === 0 && <p className="text-sm text-slate-400 italic">No steps yet — add some above.</p>}
+          {ins.map((s, i) => (
+            <div key={i} className="flex items-center gap-2 bg-slate-800 text-teal-50 rounded-lg px-3 py-1.5 font-mono text-sm">
+              <span className="flex-1">{OP_LABEL[s.op]}
+                {(s.op === "forward" || s.op === "left") && (
+                  <input type="number" value={s.val}
+                    onChange={(e) => setVal(i, e.target.value)}
+                    className="ml-2 w-16 bg-slate-700 rounded px-1 text-white text-sm" />
+                )}
+              </span>
+              <button onClick={() => move(i, -1)} className="text-slate-300 hover:text-white px-1">↑</button>
+              <button onClick={() => move(i, 1)} className="text-slate-300 hover:text-white px-1">↓</button>
+              <button onClick={() => remove(i)} className="text-rose-300 hover:text-rose-100 px-1">✕</button>
+            </div>
+          ))}
+          <button onClick={() => draw(ins)}
+            className="mt-2 w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2 rounded-lg">▶ Run / Draw</button>
+        </div>
+        <div className="md:w-1/2">
+          <canvas ref={canvasRef} width={320} height={320}
+            className="w-full border-2 border-slate-200 rounded-xl bg-slate-50" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------- Instruction reorder lab (1.1.3) ----------
+const REORDER_BLOCKS = [
+  { id: "double", label: "m = m * 2", fn: (m) => m * 2 },
+  { id: "square", label: "m = m * m", fn: (m) => m * m },
+  { id: "plus15", label: "m = m + 15", fn: (m) => m + 15 },
+];
+function ReorderLab() {
+  const [order, setOrder] = useState([0, 1, 2]);
+  const move = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= order.length) return;
+    const copy = order.slice();
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+    setOrder(copy);
+  };
+  let m = 5;
+  const outputs = [5];
+  order.forEach((idx) => { m = REORDER_BLOCKS[idx].fn(m); outputs.push(m); });
+  const finalVal = outputs[outputs.length - 1];
+
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Reorder & run</SectionHead>
+      <p className="text-slate-600 text-sm mb-4">
+        The program starts with m = 5, then runs three blocks in order. Reorder them and watch the output change.
+        Challenge: can you make the final value exceed 500? Over 1000?
+      </p>
+      <div className="font-mono text-sm bg-slate-800 text-teal-50 rounded-lg px-3 py-1.5 mb-2">m = 5 · put m</div>
+      <div className="space-y-1.5 mb-3">
+        {order.map((idx, i) => (
+          <div key={idx} className="flex items-center gap-2 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 font-mono text-sm text-slate-800">
+            <span className="flex-1">{REORDER_BLOCKS[idx].label} · put m</span>
+            <button onClick={() => move(i, -1)} className="text-slate-500 hover:text-slate-900 px-1">↑</button>
+            <button onClick={() => move(i, 1)} className="text-slate-500 hover:text-slate-900 px-1">↓</button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between bg-teal-50 border border-teal-200 rounded-lg px-4 py-2">
+        <span className="font-mono text-sm text-teal-900">Output: {outputs.join(", ")}</span>
+        <span className={`font-mono text-sm font-bold ${finalVal > 1000 ? "text-rose-600" : finalVal > 500 ? "text-amber-600" : "text-slate-600"}`}>
+          final = {finalVal}{finalVal > 1000 ? "  🎉 >1000!" : finalVal > 500 ? "  ✓ >500" : ""}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+// ---------- Flowchart stepper (1.2 Input→Process→Output) ----------
+function FlowStepLab() {
+  const [input, setInput] = useState(20);
+  const [step, setStep] = useState(0);
+  const wage = Number(input) || 0;
+  const salary = wage * 40 * 52;
+  // steps: [lineIndex highlighted, note, varsShown, outputShown]
+  const lines = [
+    "wage = Get next input",
+    "salary = wage * 40 * 52",
+    'Put "Salary is " to output',
+    "Put salary to output",
+  ];
+  const shapes = ["input", "process", "output", "output"];
+  const states = [
+    { note: "Ready. Click Step to begin at the Start node.", vars: {}, out: "" },
+    { note: "INPUT: wage gets the next input value (" + wage + ").", vars: { wage }, out: "" },
+    { note: "PROCESS: salary = wage × 40 × 52 = " + salary + ".", vars: { wage, salary }, out: "" },
+    { note: "OUTPUT: put the string literal \"Salary is \".", vars: { wage, salary }, out: "Salary is " },
+    { note: "OUTPUT: put salary's value. Done — reached End.", vars: { wage, salary }, out: "Salary is " + salary },
+  ];
+  const st = states[step];
+  const highlight = step - 1; // which line is active
+
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Flowchart stepper</SectionHead>
+      <p className="text-slate-600 text-sm mb-4">
+        Step through a Coral program one node at a time and watch Input → Process → Output in action.
+        Change the input and re-step.
+      </p>
+      <div className="flex items-center gap-2 mb-4">
+        <label className="text-xs text-slate-500 uppercase tracking-wide">Input</label>
+        <input type="number" value={input}
+          onChange={(e) => { setInput(e.target.value); setStep(0); }}
+          className="w-24 font-mono border-2 border-slate-300 rounded-lg px-2 py-1 focus:border-teal-600 focus:outline-none" />
+      </div>
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="md:w-1/2 space-y-1.5">
+          <div className="text-center font-mono text-xs text-slate-400">( Start )</div>
+          {lines.map((ln, i) => (
+            <div key={i}
+              className={`font-mono text-sm rounded-lg px-3 py-2 border-2 transition-colors ${
+                i === highlight ? "bg-teal-600 border-teal-700 text-white"
+                : "bg-slate-50 border-slate-200 text-slate-600"} ${shapes[i] === "process" ? "" : "italic"}`}>
+              {ln}
+              <span className="ml-2 text-[10px] uppercase opacity-70">{shapes[i]}</span>
+            </div>
+          ))}
+          <div className="text-center font-mono text-xs text-slate-400">( End )</div>
+        </div>
+        <div className="md:w-1/2 space-y-3">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+            <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Variables</div>
+            <div className="font-mono text-sm text-slate-800">
+              wage = {st.vars.wage !== undefined ? st.vars.wage : "—"}<br />
+              salary = {st.vars.salary !== undefined ? st.vars.salary : "—"}
+            </div>
+          </div>
+          <div className="bg-slate-900 rounded-xl p-3">
+            <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Output</div>
+            <pre className="font-mono text-sm text-teal-100 whitespace-pre-wrap min-h-6">{st.out || " "}</pre>
+          </div>
+          <p className="text-sm text-slate-700 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">{st.note}</p>
+          <div className="flex gap-2">
+            <button onClick={() => setStep(Math.max(0, step - 1))}
+              className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold py-2 rounded-lg">← Back</button>
+            <button onClick={() => setStep(Math.min(states.length - 1, step + 1))}
+              disabled={step >= states.length - 1}
+              className="flex-1 bg-teal-700 hover:bg-teal-800 disabled:opacity-40 text-white font-semibold py-2 rounded-lg">Step →</button>
+            <button onClick={() => setStep(0)}
+              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-2 rounded-lg">Reset</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------- Labs tab (holds all hands-on widgets) ----------
+const LAB_TABS = [
+  { id: "bits", label: "Binary & ASCII", C: BitLab },
+  { id: "turtle", label: "Turtle Graphics", C: TurtleLab },
+  { id: "reorder", label: "Reorder & Run", C: ReorderLab },
+  { id: "flow", label: "Flowchart Stepper", C: FlowStepLab },
+];
+function Labs() {
+  const [sub, setSub] = useState("bits");
+  const Active = LAB_TABS.find((t) => t.id === sub).C;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        {LAB_TABS.map((t) => (
+          <button key={t.id} onClick={() => setSub(t.id)}
+            className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition-colors ${
+              sub === t.id ? "bg-teal-600 border-teal-700 text-white" : "bg-white border-slate-300 text-slate-600 hover:border-teal-500"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <Active />
+    </div>
+  );
+}
+
+// ---------- Playground ----------
 function Playground() {
   const [code, setCode] = useState(DEFAULT_CODE);
   const [input, setInput] = useState("25");
   const [result, setResult] = useState(null);
-
   const run = () => setResult(runCoral(code, input));
+  const load = (ex) => { setCode(ex.code.replace(/\\n/g, "\\n")); setInput(ex.input); setResult(null); };
 
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
-        <h3 className="font-mono text-sm tracking-widest uppercase text-teal-700 mb-1">
-          Coral playground
-        </h3>
+        <SectionHead>Coral playground</SectionHead>
         <p className="text-slate-600 text-sm mb-3">
-          Write Coral, press Run, see the output instantly. Supports: integer declarations,
-          assignments, math (+ − * /), Get next input, Put ... to output, and // comments.
+          Write Coral, press Run. Supports everything in Chapter 1: integer declarations, assignments,
+          math (+ − * /), Get next input, Put ... to output, and // comments.
         </p>
-        <textarea
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          spellCheck={false}
-          rows={9}
-          className="w-full font-mono text-sm bg-slate-900 text-teal-50 rounded-xl p-4 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y"
-        />
+        <div className="flex flex-wrap gap-2 mb-3">
+          {EXAMPLES.map((ex) => (
+            <button key={ex.name} onClick={() => load(ex)}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg">{ex.name}</button>
+          ))}
+        </div>
+        <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false} rows={9}
+          className="w-full font-mono text-sm bg-slate-900 text-teal-50 rounded-xl p-4 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y" />
         <div className="flex flex-wrap items-end gap-3 mt-3">
           <div className="flex-1 min-w-40">
-            <label className="text-xs text-slate-500 uppercase tracking-wide">
-              Input (space-separated)
-            </label>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              className="w-full font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none"
-            />
+            <label className="text-xs text-slate-500 uppercase tracking-wide">Input (space-separated)</label>
+            <input value={input} onChange={(e) => setInput(e.target.value)}
+              className="w-full font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" />
           </div>
-          <button
-            onClick={run}
-            className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
-          >
-            ▶ Run
-          </button>
+          <button onClick={run}
+            className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors">▶ Run</button>
         </div>
       </div>
 
       {result && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
           <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Output</div>
-          <pre className="bg-slate-100 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap min-h-12 text-slate-900">
-            {result.output || " "}
-          </pre>
+          <pre className="bg-slate-100 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap min-h-12 text-slate-900">{result.output || " "}</pre>
           {!result.ok && (
-            <p className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
-              {result.error}
-            </p>
+            <p className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{result.error}</p>
           )}
           {result.ok && result.vars && Object.keys(result.vars).length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {Object.entries(result.vars).map(([k, v]) => (
-                <span
-                  key={k}
-                  className="font-mono text-xs bg-teal-50 text-teal-800 border border-teal-200 rounded-full px-3 py-1"
-                >
-                  {k} = {v}
-                </span>
+                <span key={k} className="font-mono text-xs bg-teal-50 text-teal-800 border border-teal-200 rounded-full px-3 py-1">{k} = {v}</span>
               ))}
             </div>
           )}
         </div>
       )}
-
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-900">
-        <strong>Try the labs:</strong> For 1.12, output exactly{" "}
-        <code className="font-mono bg-white px-1 rounded">Hello World!</code>. For 1.13, the
-        No Parking sign needs two leading spaces on line one and a \n between lines —
-        whitespace must match exactly.
-      </div>
     </div>
   );
 }
 
+// ---------- Quiz ----------
 function Quiz() {
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [score, setScore] = useState(0);
   const [done, setDone] = useState(false);
-
   const q = QUIZ[idx];
   const correct = picked === q.answer;
-
   const next = () => {
     if (idx + 1 >= QUIZ.length) setDone(true);
-    else {
-      setIdx(idx + 1);
-      setPicked(null);
-    }
+    else { setIdx(idx + 1); setPicked(null); }
   };
-
-  const restart = () => {
-    setIdx(0);
-    setPicked(null);
-    setScore(0);
-    setDone(false);
-  };
+  const restart = () => { setIdx(0); setPicked(null); setScore(0); setDone(false); };
 
   if (done) {
     const pct = Math.round((score / QUIZ.length) * 100);
     return (
       <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 text-center">
-        <div className="font-mono text-6xl font-bold text-slate-900 mb-2">
-          {score}/{QUIZ.length}
-        </div>
+        <div className="font-mono text-6xl font-bold text-slate-900 mb-2">{score}/{QUIZ.length}</div>
         <p className="text-slate-600 mb-1">
-          {pct >= 85
-            ? "Excellent — you've got this chapter down."
-            : pct >= 60
-            ? "Solid. Review the ones you missed and run it again."
+          {pct >= 85 ? "Excellent — you've got this chapter down."
+            : pct >= 60 ? "Solid. Review the ones you missed and run it again."
             : "Good start — reread the Learn tab, then try again."}
         </p>
-        <button
-          onClick={restart}
-          className="mt-4 bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
-        >
-          Retake quiz
-        </button>
+        <button onClick={restart} className="mt-4 bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg">Retake quiz</button>
       </div>
     );
   }
-
   return (
     <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
       <div className="flex justify-between items-center mb-4">
-        <span className="font-mono text-xs text-slate-500">
-          Question {idx + 1} of {QUIZ.length}
-        </span>
+        <span className="font-mono text-xs text-slate-500">Question {idx + 1} of {QUIZ.length}</span>
         <span className="font-mono text-xs text-teal-700 font-semibold">score: {score}</span>
       </div>
       <div className="h-1.5 bg-slate-100 rounded-full mb-5">
-        <div
-          className="h-1.5 bg-teal-600 rounded-full transition-all"
-          style={{ width: `${(idx / QUIZ.length) * 100}%` }}
-        />
+        <div className="h-1.5 bg-teal-600 rounded-full transition-all" style={{ width: `${(idx / QUIZ.length) * 100}%` }} />
       </div>
       <p className="text-slate-900 font-medium mb-4 whitespace-pre-wrap">{q.q}</p>
       <div className="space-y-2">
@@ -478,36 +899,19 @@ function Quiz() {
             else cls = "border-slate-200 bg-slate-50 text-slate-400";
           }
           return (
-            <button
-              key={i}
-              disabled={picked !== null}
-              onClick={() => {
-                setPicked(i);
-                if (i === q.answer) setScore(score + 1);
-              }}
-              className={`w-full text-left border-2 rounded-xl px-4 py-3 font-mono text-sm transition-colors ${cls}`}
-            >
-              {opt}
-            </button>
+            <button key={i} disabled={picked !== null}
+              onClick={() => { setPicked(i); if (i === q.answer) setScore(score + 1); }}
+              className={`w-full text-left border-2 rounded-xl px-4 py-3 font-mono text-sm transition-colors ${cls}`}>{opt}</button>
           );
         })}
       </div>
       {picked !== null && (
-        <div
-          className={`mt-4 rounded-xl px-4 py-3 text-sm ${
-            correct
-              ? "bg-teal-50 border border-teal-200 text-teal-900"
-              : "bg-rose-50 border border-rose-200 text-rose-900"
-          }`}
-        >
+        <div className={`mt-4 rounded-xl px-4 py-3 text-sm ${correct ? "bg-teal-50 border border-teal-200 text-teal-900" : "bg-rose-50 border border-rose-200 text-rose-900"}`}>
           <strong>{correct ? "Correct." : "Not quite."}</strong> {q.why}
         </div>
       )}
       {picked !== null && (
-        <button
-          onClick={next}
-          className="mt-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors"
-        >
+        <button onClick={next} className="mt-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold px-6 py-2.5 rounded-lg">
           {idx + 1 >= QUIZ.length ? "See results" : "Next →"}
         </button>
       )}
@@ -515,60 +919,121 @@ function Quiz() {
   );
 }
 
-function Learn() {
-  const [open, setOpen] = useState(0);
+// ---------- Exam prep: summary, graded labs, panic sheet ----------
+const COVERAGE = [
+  "1.1 Programming (general) — Learn + Turtle/Reorder labs",
+  "1.2 Programming basics — Learn + Flowchart Stepper",
+  "1.3 Comments & whitespace — Learn + Quiz",
+  "1.4 Brief history — Learn + Quiz",
+  "1.5 Computers all around us — Learn + Quiz",
+  "1.6 Representing info as bits — Learn + Binary/ASCII lab",
+  "1.7 Problem solving — Learn + Quiz",
+  "1.8 Why programming — Learn + Quiz",
+  "1.9 Why whitespace matters — Learn + Quiz",
+  "1.10 Code & pseudocode — Learn + Quiz",
+  "1.11 Summary — this tab",
+  "1.12 LAB Hello World! — Playground practice below",
+  "1.13 LAB No parking sign — Playground practice below",
+];
+function ExamPrep() {
   return (
-    <div className="space-y-3">
-      {LESSONS.map((l, i) => (
-        <div
-          key={i}
-          className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
-        >
-          <button
-            onClick={() => setOpen(open === i ? -1 : i)}
-            className="w-full flex items-center justify-between px-5 py-4 text-left"
-          >
-            <span className="font-semibold text-slate-900">{l.title}</span>
-            <span className="font-mono text-teal-700 text-lg">{open === i ? "−" : "+"}</span>
-          </button>
-          {open === i && (
-            <div className="px-5 pb-5">
-              <p className="text-slate-700 text-sm leading-relaxed mb-3">{l.body}</p>
-              <pre className="bg-slate-900 text-teal-50 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap">
-                {l.example}
-              </pre>
-              <p className="text-xs text-slate-500 mt-2">↳ {l.note}</p>
-            </div>
-          )}
+    <div className="space-y-6">
+      <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <SectionHead>Graded labs — exact expected output</SectionHead>
+        <p className="text-slate-600 text-sm mb-4">
+          zyBooks checks output character-for-character, including spaces and newlines. Practice these in the
+          Playground first (there are one-tap example buttons for both).
+        </p>
+        <div className="space-y-4">
+          <div className="border border-slate-200 rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-1">1.12 — Hello World!</div>
+            <p className="text-xs text-slate-500 mb-2">Output exactly:</p>
+            <pre className="bg-slate-900 text-teal-50 rounded-lg p-3 font-mono text-sm">Hello World!</pre>
+            <p className="text-xs text-slate-500 mt-2">Coral: <span className="font-mono">Put "Hello World!" to output</span></p>
+          </div>
+          <div className="border border-slate-200 rounded-xl p-4">
+            <div className="font-semibold text-slate-900 mb-1">1.13 — No parking sign</div>
+            <p className="text-xs text-slate-500 mb-2">Output exactly (note the TWO leading spaces on line 1):</p>
+            <pre className="bg-slate-900 text-teal-50 rounded-lg p-3 font-mono text-sm">{"  NO PARKING\n1:00 - 5:00 a.m."}</pre>
+            <p className="text-xs text-slate-500 mt-2">Coral:</p>
+            <pre className="bg-slate-100 text-slate-800 rounded-lg p-3 font-mono text-xs mt-1">{'Put "  NO PARKING\\n" to output\nPut "1:00 - 5:00 a.m." to output'}</pre>
+          </div>
         </div>
-      ))}
+      </section>
+
+      <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <SectionHead>Panic sheet — key terms</SectionHead>
+        <div className="grid sm:grid-cols-2 gap-2 text-sm">
+          {[
+            ["program", "instructions run one at a time"],
+            ["variable", "named box holding a value that can vary"],
+            ["algorithm", "steps that solve a problem"],
+            ["statement", "one action; sits in one flowchart node"],
+            ["interpreter", "the tool that runs the program"],
+            ["parallelogram", "input OR output node"],
+            ["rectangle", "a process (calculation) node"],
+            ["oval", "Start / End node"],
+            ["string literal", 'text in "double quotes"'],
+            ["\\n", "newline — invisible, drops the cursor a line"],
+            ["comment //", "for humans; ignored when run; own line"],
+            ["bit / byte", "0 or 1 / 8 bits"],
+            ["binary", "base-2; weights 128 64 32 16 8 4 2 1"],
+            ["ASCII", "7-bit code, 128 characters ('A'=65)"],
+            ["Moore's Law", "switches halve in size ~every 2 years"],
+            ["embedded computer", "computer inside another device"],
+            ["pseudocode", "informal text description, for humans"],
+            ["= vs ==", "assign vs compare — NOT the same"],
+          ].map(([t, d]) => (
+            <div key={t} className="flex gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+              <span className="font-mono text-teal-700 font-semibold whitespace-nowrap">{t}</span>
+              <span className="text-slate-600">{d}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+        <SectionHead>Chapter coverage checklist</SectionHead>
+        <p className="text-slate-600 text-sm mb-3">Every section of the PDF, and where it lives in this app:</p>
+        <ul className="space-y-1.5">
+          {COVERAGE.map((c) => (
+            <li key={c} className="flex items-start gap-2 text-sm text-slate-700">
+              <span className="text-teal-600 mt-0.5">✓</span><span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }
 
+// ============================================================
+//  APP SHELL
+// ============================================================
 const TABS = [
-  { id: "learn", label: "Learn" },
-  { id: "bits", label: "Bit Lab" },
-  { id: "code", label: "Playground" },
-  { id: "quiz", label: "Quiz" },
+  { id: "learn", label: "Learn", C: Learn },
+  { id: "labs", label: "Labs", C: Labs },
+  { id: "code", label: "Playground", C: Playground },
+  { id: "quiz", label: "Quiz", C: Quiz },
+  { id: "exam", label: "Exam Prep", C: ExamPrep },
 ];
 
 function App() {
   const [tab, setTab] = useState("learn");
+  const Active = TABS.find((t) => t.id === tab).C;
   return (
     <div className="min-h-screen bg-slate-100" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
       <header className="bg-slate-900 text-white">
         <div className="max-w-3xl mx-auto px-5 py-8">
           <div className="font-mono text-xs tracking-widest text-teal-400 uppercase mb-2">
-            Programming Foundations · Chapter 1
+            WGU D278 · Programming Foundations · Chapter 1
           </div>
           <h1 className="text-3xl font-bold mb-1">
-            Intro to Programming,{" "}
-            <span className="text-teal-400 font-mono">without the friction</span>
+            Intro to Programming, <span className="text-teal-400 font-mono">without the friction</span>
           </h1>
           <p className="text-slate-300 text-sm">
-            Everything from the zyBooks chapter — programs, variables, output, binary, Coral —
-            as short lessons, hands-on labs, and a quiz with instant feedback.
+            The whole zyBooks chapter (1.1–1.13) in Coral — short lessons, four hands-on labs, a playground,
+            a {QUIZ.length}-question quiz, and an exam-prep sheet with the graded labs' exact output.
           </p>
         </div>
       </header>
@@ -576,15 +1041,9 @@ function App() {
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-5 flex gap-1 overflow-x-auto">
           {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
+            <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-4 py-3 font-mono text-sm whitespace-nowrap border-b-2 transition-colors ${
-                tab === t.id
-                  ? "border-teal-600 text-teal-800 font-semibold"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
+                tab === t.id ? "border-teal-600 text-teal-800 font-semibold" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
               {t.label}
             </button>
           ))}
@@ -592,14 +1051,11 @@ function App() {
       </nav>
 
       <main className="max-w-3xl mx-auto px-5 py-8">
-        {tab === "learn" && <Learn />}
-        {tab === "bits" && <BitLab />}
-        {tab === "code" && <Playground />}
-        {tab === "quiz" && <Quiz />}
+        <Active />
       </main>
 
       <footer className="max-w-3xl mx-auto px-5 pb-10 text-center text-xs text-slate-400">
-        Study companion for zyBooks Ch. 1 — use zyBooks to submit graded activities.
+        Study companion for zyBooks D278 Ch. 1 — use zyBooks to submit graded activities.
       </footer>
     </div>
   );
