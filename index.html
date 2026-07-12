@@ -1858,7 +1858,7 @@ function runCoral(code, inputText, maxCh) {
     const v = val.v;
     if (!isFinite(v)) return v > 0 ? "Infinity" : (v < 0 ? "-Infinity" : "NotANumber");
     if (Number.isNaN(v)) return "NotANumber";
-    let r = parseFloat(v.toFixed(6));
+    let r = Math.abs(v) < 1e15 ? parseFloat(v.toPrecision(6)) : v;
     if (Number.isInteger(r)) return r.toFixed(1);
     return String(r);
   }
@@ -2725,6 +2725,22 @@ Put salary to output` },
 Put "1:00 - 5:00 a.m." to output` },
     { name: "Newlines", input: "", code:
 `Put "a\\nb\\nc" to output` },
+    { name: "Dog years (1.2.7)", input: "3", code:
+`dogYears = Get next input
+humanYears = 7 * dogYears
+Put "A " to output
+Put dogYears to output
+Put " year old dog is about a " to output
+Put humanYears to output
+Put " year old human." to output` },
+    { name: "Comments + blank line (1.3.1)", input: "", code:
+`// Output header text
+Put "Chapter 1" to output
+// Output space below header
+// Two \\n's yield a blank line
+Put "\\n\\n" to output` },
+    { name: "Output a sentence (Challenge 1.10.1)", input: "", code:
+`Put "Sam is great." to output` },
   ],
   2: [
     { name: "Measles (variable on both sides)", input: "", code:
@@ -2768,6 +2784,28 @@ y = x / 5
 Put x to output
 Put " " to output
 Put y to output` },
+    { name: "Variable assignments (2.2.1)", input: "", code:
+`x = 9
+y = 6
+Put x to output
+Put " " to output
+Put y to output` },
+    { name: "Integer expressions (2.5.1)", input: "", code:
+`x = 3
+y = 2 * (x + 4)
+Put x to output
+Put " " to output
+Put y to output` },
+    { name: "Math function (2.8.1)", input: "", code:
+`x = SquareRoot(36.0)
+Put x to output` },
+    { name: "Age in days (2.6, leap years)", input: "20", code:
+`userAgeYears = Get next input
+userAgeDays = userAgeYears * 365
+userAgeDays = userAgeDays + (userAgeYears / 4)
+Put "You are " to output
+Put userAgeDays to output
+Put " days old." to output` },
   ],
   3: [
     { name: "Hotel rate (if branch)", input: "68", code:
@@ -2878,6 +2916,27 @@ while numAsterisk >= 0
       i = i + 1
    Put "\\n" to output
    numAsterisk = Get next input` },
+    { name: "Average (sentinel 0)", input: "10 1 6 3 0", code:
+`valuesSum = 0
+numValues = 0
+currValue = Get next input
+while currValue > 0
+   valuesSum = valuesSum + currValue
+   numValues = numValues + 1
+   currValue = Get next input
+averageValue = (1.0 * valuesSum) / numValues
+Put "Average: " to output
+Put averageValue to output` },
+    { name: "Nested loops grid (Challenge 4.7.1)", input: "", code:
+`row = 1
+while row <= 4
+   col = 5
+   while col <= 7
+      Put row to output
+      Put col to output
+      Put " " to output
+      col = col + 1
+   row = row + 1` },
   ],
   5: [
     { name: "Print three elements (Challenge 5.6.1)", input: "", code:
@@ -2989,6 +3048,25 @@ Function Main() returns nothing
    x = FindScore(quizScores)
    Put x to output
    Put "\\n" to output` },
+    { name: "Pizza volume (6.5.3, multi-param)", input: "", code:
+`Function PrintPizzaVolume(float pizzaDiameter, float pizzaHeight) returns nothing
+   float piVal
+   float pizzaRadius
+   float pizzaArea
+   float pizzaVolume
+   piVal = 3.14159265
+   pizzaRadius = pizzaDiameter / 2.0
+   pizzaArea = piVal * pizzaRadius * pizzaRadius
+   pizzaVolume = pizzaArea * pizzaHeight
+   Put pizzaDiameter to output
+   Put " x " to output
+   Put pizzaHeight to output
+   Put " inch pizza is " to output
+   Put pizzaVolume to output
+   Put " inches cubed.\\n" to output
+
+Function Main() returns nothing
+   PrintPizzaVolume(12.0, 0.3)` },
   ],
   7: [
     { name: "Linear search driver", input: "10", code:
@@ -3047,6 +3125,48 @@ Function Main() returns nothing
    m = FindMax(vals)
    Put "Max: " to output
    Put m to output` },
+    { name: "Binary search driver", input: "10", code:
+`Function BinarySearch(integer array(?) numbers, integer key) returns integer mid
+   integer low
+   integer high
+   high = numbers.size - 1
+   while (high >= low) and (numbers[mid] != key)
+      mid = (high + low) / 2
+      if numbers[mid] < key
+         low = mid + 1
+      elseif numbers[mid] > key
+         high = mid - 1
+   if numbers[mid] != key
+      mid = -1
+
+Function Main() returns nothing
+   integer array(8) numbers
+   integer i
+   integer key
+   integer keyIndex
+   numbers[0] = 2
+   numbers[1] = 4
+   numbers[2] = 7
+   numbers[3] = 10
+   numbers[4] = 11
+   numbers[5] = 32
+   numbers[6] = 45
+   numbers[7] = 87
+   Put "NUMBERS: " to output
+   for i = 0; i < numbers.size; i = i + 1
+      Put numbers[i] to output
+      Put " " to output
+   Put "\\n" to output
+   key = Get next input
+   keyIndex = BinarySearch(numbers, key)
+   if keyIndex == -1
+      Put key to output
+      Put " was not found" to output
+   else
+      Put "Found " to output
+      Put key to output
+      Put " at index " to output
+      Put keyIndex to output` },
   ],
   8: [
     { name: "SDLC as a checklist (a plain program)", input: "", code:
