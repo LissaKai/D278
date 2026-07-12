@@ -1373,73 +1373,517 @@ const { useState, useRef, useEffect } = React;
 //  Supports: integer declarations, assignments, math (+ - * /),
 //  Get next input, Put "string" / Put variable to output, // comments
 // ============================================================
-function runCoral(code, inputText) {
-  const vars = {};
-  const inputs = inputText.trim().length ? inputText.trim().split(/\s+/) : [];
+// ============================================================
+//  Coral interpreter — cumulative, chapter-gated
+//  runCoral(code, inputText, maxCh) -> {ok, output, error, vars, gated}
+//  Supports (cumulatively):
+//   Ch1: integer decl, assignment, + - * /, Put "..."/var to output, \n,
+//        Get next input, // comments
+//   Ch2: float, %, integer-vs-float division, math builtins, RandomNumber,
+//        formatted "with N decimal places"
+//   Ch3: if / elseif / else, == != < > <= >=, and or not, AbsoluteValue
+//   Ch4: while, for, do-while
+//   Ch5: arrays  integer array(n) name, name[i], name.size
+//   Ch6: Function ... returns ..., Main(), calls, array(?) params
+//   Ch7-9: no new runnable syntax (algorithms/design/languages)
+// ============================================================
+function runCoral(code, inputText, maxCh) {
+  maxCh = maxCh || 9;
+  // ---- inputs ----
+  const inputs = (inputText || "").trim().length ? inputText.trim().split(/\s+/) : [];
   let inIdx = 0;
   let output = "";
-  const err = (line, msg) => ({ ok: false, output, error: `Line ${line}: ${msg}` });
+  let steps = 0;
+  const MAX_STEPS = 2000000;
 
-  const lines = code.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const line = raw.trim();
-    const n = i + 1;
-    if (!line || line.startsWith("//")) continue;
-
-    // integer declaration:  integer wage
-    let m = line.match(/^integer\s+([A-Za-z][A-Za-z0-9]*)$/);
-    if (m) { vars[m[1]] = 0; continue; }
-
-    // Put "string literal" to output
-    m = line.match(/^Put\s+"([^"]*)"\s+to\s+output$/);
-    if (m) { output += m[1].replace(/\\n/g, "\n"); continue; }
-
-    // Put variable to output
-    m = line.match(/^Put\s+([A-Za-z][A-Za-z0-9]*)\s+to\s+output$/);
-    if (m) {
-      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared`);
-      output += String(vars[m[1]]);
-      continue;
-    }
-
-    // x = Get next input
-    m = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*=\s*Get next input$/);
-    if (m) {
-      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared (add: integer ${m[1]})`);
-      if (inIdx >= inputs.length) return err(n, "ran out of input values — add more in the Input box");
-      const v = Number(inputs[inIdx++]);
-      if (Number.isNaN(v)) return err(n, `input "${inputs[inIdx - 1]}" is not a number`);
-      vars[m[1]] = v;
-      continue;
-    }
-
-    // x = expression
-    m = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/);
-    if (m) {
-      if (!(m[1] in vars)) return err(n, `variable "${m[1]}" was never declared (add: integer ${m[1]})`);
-      let expr = m[2];
-      expr = expr.replace(/[A-Za-z][A-Za-z0-9]*/g, (name) => {
-        if (name in vars) return `(${vars[name]})`;
-        return `__UNKNOWN_${name}__`;
-      });
-      if (expr.includes("__UNKNOWN_")) {
-        const bad = expr.match(/__UNKNOWN_([A-Za-z0-9]+)__/)[1];
-        return err(n, `variable "${bad}" was never declared`);
-      }
-      if (!/^[\d\s+\-*/().%]+$/.test(expr)) return err(n, "expression has characters I don't understand");
-      try {
-        const val = Function(`"use strict"; return (${expr});`)();
-        vars[m[1]] = Math.trunc(val);
-      } catch (e) {
-        return err(n, "couldn't compute that expression");
-      }
-      continue;
-    }
-
-    return err(n, `I don't recognize this statement: "${line}"`);
+  // ---- feature gating: which chapter introduces each feature ----
+  // Strip strings + comments first so keywords in text don't trigger.
+  const scan = code.split("\n").map(l => stripLine(l).replace(/"[^"]*"/g, '""')).join("\n");
+  const gate = (needed, label) => {
+    if (maxCh < needed) return `${label} ${needed <= 9 ? "is covered in Chapter " + needed : ""}. This playground only runs syntax through Chapter ${maxCh}.`;
+    return null;
+  };
+  const featureChecks = [
+    [/\bfloat\b/, 2, "Floating-point (float) numbers"],
+    [/\d+\.\d/, 2, "Floating-point (float) numbers"],
+    [/[^!<>=]%[^=]|%\s/, 2, "The modulo operator %"],
+    [/\b(SquareRoot|RaiseToPower|RandomNumber|SeedRandomNumbers)\b/, 2, "Math/random built-in functions"],
+    [/\bAbsoluteValue\b/, 3, "AbsoluteValue and float comparison"],
+    [/(^|\n)\s*(if|elseif|else)\b/, 3, "Branches (if-else)"],
+    [/[<>]=?|==|!=|\b(and|or|not)\b/, 3, "Comparisons and logical operators"],
+    [/(^|\n)\s*(while|for|do)\b/, 4, "Loops (while / for / do-while)"],
+    [/\barray\b|\.size\b|\[[^\]]*\]/, 5, "Arrays"],
+    [/\bFunction\b|\breturns\b/, 6, "User-defined functions"],
+  ];
+  // Report the MOST advanced construct used that this chapter can't run yet.
+  let worst = null;
+  for (const [re, ch, label] of featureChecks) {
+    if (ch > maxCh && re.test(scan) && (!worst || ch > worst.ch)) worst = { ch, label };
   }
-  return { ok: true, output, vars };
+  if (worst) return { ok: false, gated: true, output: "", error: gate(worst.ch, worst.label) };
+
+  // ---- helpers ----
+  function stripLine(raw) {
+    // remove // comment that is not inside a string
+    let inStr = false, out = "";
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (c === '"') { inStr = !inStr; out += c; continue; }
+      if (!inStr && c === "/" && raw[i + 1] === "/") break;
+      out += c;
+    }
+    return out;
+  }
+  function indentOf(s) { const m = s.match(/^\s*/)[0]; return m.replace(/\t/g, "   ").length; }
+
+  // ---- tokenizer for expressions ----
+  function tokenize(s) {
+    const toks = [];
+    let i = 0;
+    const two = ["==", "!=", "<=", ">="];
+    while (i < s.length) {
+      const c = s[i];
+      if (c === " " || c === "\t") { i++; continue; }
+      if (c === '"') {
+        let j = i + 1, str = "";
+        while (j < s.length && s[j] !== '"') { str += s[j]; j++; }
+        toks.push({ t: "str", v: str }); i = j + 1; continue;
+      }
+      if (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(s[i + 1]))) {
+        let j = i, num = "";
+        while (j < s.length && /[0-9.]/.test(s[j])) { num += s[j]; j++; }
+        toks.push({ t: "num", v: num, f: num.includes(".") }); i = j; continue;
+      }
+      if (/[A-Za-z_]/.test(c)) {
+        let j = i, id = "";
+        while (j < s.length && /[A-Za-z0-9_]/.test(s[j])) { id += s[j]; j++; }
+        if (id === "and" || id === "or" || id === "not") toks.push({ t: "op", v: id });
+        else toks.push({ t: "id", v: id });
+        i = j; continue;
+      }
+      const t2 = s.substr(i, 2);
+      if (two.includes(t2)) { toks.push({ t: "op", v: t2 }); i += 2; continue; }
+      if ("+-*/%<>()[],.".includes(c)) { toks.push({ t: "op", v: c }); i++; continue; }
+      throw { line: 0, msg: `unexpected character "${c}"` };
+    }
+    return toks;
+  }
+
+  // value = {v:Number, f:Boolean(isFloat), b:optional boolean, s:optional string}
+  const I = (n) => ({ v: Math.trunc(n), f: false });
+  const F = (n) => ({ v: n, f: true });
+  const B = (bool) => ({ v: bool ? 1 : 0, f: false, b: true });
+
+  // ---- Pratt-ish recursive descent expression parser/evaluator ----
+  function makeEval(scope) {
+    function evalExpr(toks) {
+      let pos = 0;
+      const peek = () => toks[pos];
+      const next = () => toks[pos++];
+      function parseExpr() { return parseOr(); }
+      function parseOr() {
+        let left = parseAnd();
+        while (peek() && peek().v === "or") { next(); const r = parseAnd(); left = B(truthy(left) || truthy(r)); }
+        return left;
+      }
+      function parseAnd() {
+        let left = parseEq();
+        while (peek() && peek().v === "and") { next(); const r = parseEq(); left = B(truthy(left) && truthy(r)); }
+        return left;
+      }
+      function parseEq() {
+        let left = parseRel();
+        while (peek() && (peek().v === "==" || peek().v === "!=")) {
+          const op = next().v; const r = parseRel();
+          left = B(op === "==" ? valEq(left, r) : !valEq(left, r));
+        }
+        return left;
+      }
+      function parseRel() {
+        let left = parseAdd();
+        while (peek() && ["<", ">", "<=", ">="].includes(peek().v)) {
+          const op = next().v; const r = parseAdd();
+          const a = left.v, b = r.v;
+          left = B(op === "<" ? a < b : op === ">" ? a > b : op === "<=" ? a <= b : a >= b);
+        }
+        return left;
+      }
+      function parseAdd() {
+        let left = parseMul();
+        while (peek() && (peek().v === "+" || peek().v === "-")) {
+          const op = next().v; const r = parseMul();
+          const f = left.f || r.f;
+          const v = op === "+" ? left.v + r.v : left.v - r.v;
+          left = f ? F(v) : I(v);
+        }
+        return left;
+      }
+      function parseMul() {
+        let left = parseUnary();
+        while (peek() && (peek().v === "*" || peek().v === "/" || peek().v === "%")) {
+          const op = next().v; const r = parseUnary();
+          if (op === "*") { const f = left.f || r.f; left = f ? F(left.v * r.v) : I(left.v * r.v); }
+          else if (op === "%") {
+            if (r.v === 0) throw { line: 0, msg: "modulo by zero — program ends" };
+            left = I(left.v % r.v);
+          } else { // /
+            if (left.f || r.f) { if (r.v === 0) { left = F(left.v === 0 ? NaN : (left.v > 0 ? Infinity : -Infinity)); } else left = F(left.v / r.v); }
+            else { if (r.v === 0) throw { line: 0, msg: "divide by zero — program ends" }; left = I(Math.trunc(left.v / r.v)); }
+          }
+        }
+        return left;
+      }
+      function parseUnary() {
+        if (peek() && peek().v === "-") { next(); const r = parseUnary(); return r.f ? F(-r.v) : I(-r.v); }
+        if (peek() && peek().v === "not") { next(); const r = parseUnary(); return B(!truthy(r)); }
+        return parsePrimary();
+      }
+      function parsePrimary() {
+        const tk = peek();
+        if (!tk) throw { line: 0, msg: "unexpected end of expression" };
+        if (tk.t === "num") { next(); return tk.f ? F(parseFloat(tk.v)) : I(parseInt(tk.v, 10)); }
+        if (tk.t === "str") { next(); return { v: 0, f: false, s: tk.v }; }
+        if (tk.v === "(") { next(); const e = parseExpr(); if (peek() && peek().v === ")") next(); return e; }
+        if (tk.t === "id") {
+          const name = next().v;
+          // function call?
+          if (peek() && peek().v === "(") {
+            next(); const args = [];
+            if (peek() && peek().v !== ")") {
+              args.push(parseExpr());
+              while (peek() && peek().v === ",") { next(); args.push(parseExpr()); }
+            }
+            if (peek() && peek().v === ")") next();
+            return callFunction(name, args);
+          }
+          // array index or .size
+          let base = readVar(name);
+          while (peek() && (peek().v === "[" || peek().v === ".")) {
+            if (peek().v === "[") {
+              next(); const idx = parseExpr(); if (peek() && peek().v === "]") next();
+              const arr = base.arr;
+              if (!arr) throw { line: 0, msg: `"${name}" is not an array` };
+              const k = Math.trunc(idx.v);
+              if (k < 0 || k >= arr.length) throw { line: 0, msg: `array index ${k} is out of range (0..${arr.length - 1}) — program ends` };
+              base = arr[k];
+            } else {
+              next(); const attr = next().v;
+              if (attr === "size") { base = I(base.arr ? base.arr.length : 0); }
+              else throw { line: 0, msg: `unknown attribute .${attr}` };
+            }
+          }
+          return base;
+        }
+        throw { line: 0, msg: `unexpected "${tk.v}"` };
+      }
+      function readVar(name) {
+        const cell = scope.vars[name];
+        if (cell === undefined) throw { line: 0, msg: `variable "${name}" was never declared` };
+        return cell;
+      }
+      const result = parseExpr();
+      return result;
+    }
+    return evalExpr;
+  }
+
+  function truthy(val) { if (val.b !== undefined) return val.v === 1; return val.v !== 0; }
+  function valEq(a, b) { if (a.s !== undefined || b.s !== undefined) return a.s === b.s; return a.v === b.v; }
+
+  // ---- built-in + user function dispatch ----
+  const functions = {}; // name -> {params:[{type,name,isArray}], ret:{type,name}|null, body:[stmts]}
+  let seed = null;
+  function coralRandom(lo, hi) {
+    // simple deterministic PRNG when seeded; else Math-based
+    if (seed === null) return lo + Math.floor(Math.random() * (hi - lo + 1));
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return lo + (seed % (hi - lo + 1));
+  }
+  function callFunction(name, args) {
+    switch (name) {
+      case "SquareRoot": return F(Math.sqrt(args[0].v));
+      case "RaiseToPower": return F(Math.pow(args[0].v, args[1].v));
+      case "AbsoluteValue": { const a = args[0]; return a.f ? F(Math.abs(a.v)) : I(Math.abs(a.v)); }
+      case "RandomNumber": return I(coralRandom(Math.trunc(args[0].v), Math.trunc(args[1].v)));
+      case "SeedRandomNumbers": seed = Math.trunc(args[0].v) & 0x7fffffff; return I(0);
+    }
+    const fn = functions[name];
+    if (!fn) throw { line: 0, msg: `function "${name}" is not defined` };
+    const local = { vars: {} };
+    fn.params.forEach((p, k) => {
+      const a = args[k] || I(0);
+      if (p.isArray) local.vars[p.name] = a; // pass array by reference
+      else if (p.type === "float") local.vars[p.name] = F(a.v);
+      else local.vars[p.name] = I(a.v);
+    });
+    if (fn.ret) {
+      local.vars[fn.ret.name] = fn.ret.isArray ? { arr: [] } : (fn.ret.type === "float" ? F(0) : I(0));
+    }
+    const rv = execBlock(fn.body, local);
+    if (rv && rv.__return !== undefined) return rv.__return;
+    if (fn.ret) return local.vars[fn.ret.name];
+    return I(0);
+  }
+
+  // ---- statement parsing (indentation blocks) ----
+  const rawLines = code.split("\n").map((l, i) => ({ raw: stripLine(l), n: i + 1 }))
+    .filter(l => l.raw.trim().length > 0)
+    .map(l => ({ text: l.raw.trim(), indent: indentOf(l.raw), n: l.n }));
+
+  function parseStmts(lines, start, indent) {
+    const stmts = [];
+    let i = start;
+    while (i < lines.length && lines[i].indent >= indent) {
+      if (lines[i].indent > indent) { i++; continue; } // safety
+      const ln = lines[i];
+      const t = ln.text;
+      let m;
+      if ((m = t.match(/^Function\s+([A-Za-z_]\w*)\s*\((.*)\)\s+returns\s+(.+)$/))) {
+        const body = collectBody(lines, i + 1, indent);
+        registerFunction(m[1], m[2], m[3], body.stmts);
+        i = body.next;
+      } else if (/^if\b/.test(t)) {
+        const node = { type: "if", branches: [] };
+        // first branch
+        let cond = t.replace(/^if\s+/, "");
+        let b = collectBody(lines, i + 1, indent);
+        node.branches.push({ cond, body: b.stmts });
+        i = b.next;
+        // elseif / else at same indent
+        while (i < lines.length && lines[i].indent === indent && /^(elseif|else)\b/.test(lines[i].text)) {
+          const et = lines[i].text;
+          if (/^elseif\b/.test(et)) {
+            const c2 = et.replace(/^elseif\s+/, "");
+            const bb = collectBody(lines, i + 1, indent);
+            node.branches.push({ cond: c2, body: bb.stmts });
+            i = bb.next;
+          } else {
+            const bb = collectBody(lines, i + 1, indent);
+            node.branches.push({ cond: null, body: bb.stmts });
+            i = bb.next;
+          }
+        }
+        stmts.push(node);
+      } else if (/^while\b/.test(t)) {
+        const cond = t.replace(/^while\s+/, "");
+        const b = collectBody(lines, i + 1, indent);
+        stmts.push({ type: "while", cond, body: b.stmts }); i = b.next;
+      } else if (/^for\b/.test(t)) {
+        const parts = t.replace(/^for\s+/, "").split(";");
+        const b = collectBody(lines, i + 1, indent);
+        stmts.push({ type: "for", init: parts[0].trim(), cond: (parts[1] || "").trim(), upd: (parts[2] || "").trim(), body: b.stmts });
+        i = b.next;
+      } else if (/^do\b/.test(t)) {
+        const b = collectBody(lines, i + 1, indent);
+        i = b.next;
+        let cond = "1";
+        if (i < lines.length && lines[i].indent === indent && /^while\b/.test(lines[i].text)) {
+          cond = lines[i].text.replace(/^while\s+/, ""); i++;
+        }
+        stmts.push({ type: "dowhile", cond, body: b.stmts });
+      } else {
+        stmts.push({ type: "line", text: t, n: ln.n }); i++;
+      }
+    }
+    return { stmts, next: i };
+  }
+  function collectBody(lines, start, parentIndent) {
+    if (start >= lines.length || lines[start].indent <= parentIndent) return { stmts: [], next: start };
+    const childIndent = lines[start].indent;
+    return parseStmts(lines, start, childIndent);
+  }
+  function registerFunction(name, paramStr, retStr, body) {
+    const params = [];
+    paramStr.trim().split(",").forEach(p => {
+      p = p.trim(); if (!p) return;
+      const am = p.match(/^(integer|float)\s+array\s*\(\s*\??\s*\)\s+([A-Za-z_]\w*)$/);
+      if (am) { params.push({ type: am[1], name: am[2], isArray: true }); return; }
+      const sm = p.match(/^(integer|float)\s+([A-Za-z_]\w*)$/);
+      if (sm) { params.push({ type: sm[1], name: sm[2], isArray: false }); }
+      else { const nm = p.match(/([A-Za-z_]\w*)$/); params.push({ type: "integer", name: nm ? nm[1] : p, isArray: false }); }
+    });
+    let ret = null;
+    retStr = retStr.trim();
+    if (!/^nothing\b/.test(retStr)) {
+      const rm = retStr.match(/^(integer|float)\s+array\s*\(\s*\??\s*\)\s+([A-Za-z_]\w*)$/);
+      if (rm) ret = { type: rm[1], name: rm[2], isArray: true };
+      else { const r2 = retStr.match(/^(integer|float)\s+([A-Za-z_]\w*)$/); if (r2) ret = { type: r2[1], name: r2[2], isArray: false }; }
+    }
+    functions[name] = { params, ret, body };
+  }
+
+  // ---- execution ----
+  function declare(scope, type, name, isArray, size) {
+    if (isArray) {
+      const arr = [];
+      for (let k = 0; k < size; k++) arr.push(type === "float" ? F(0) : I(0));
+      scope.vars[name] = { arr, elemType: type };
+    } else scope.vars[name] = type === "float" ? F(0) : I(0);
+    scope.types = scope.types || {}; scope.types[name] = type;
+  }
+  function execBlock(stmts, scope) {
+    for (const st of stmts) {
+      const r = execStmt(st, scope);
+      if (r && (r.__return !== undefined || r.__break)) return r;
+    }
+    return null;
+  }
+  function execStmt(st, scope) {
+    if (++steps > MAX_STEPS) throw { line: 0, msg: "program ran too long (possible infinite loop) — stopped" };
+    const ev = makeEval(scope);
+    if (st.type === "line") return execLine(st, scope, ev);
+    if (st.type === "if") {
+      for (const br of st.branches) {
+        if (br.cond === null) return execBlock(br.body, scope);
+        if (truthy(ev(tokenize(br.cond)))) return execBlock(br.body, scope);
+      }
+      return null;
+    }
+    if (st.type === "while") {
+      while (truthy(ev(tokenize(st.cond)))) {
+        if (++steps > MAX_STEPS) throw { line: 0, msg: "program ran too long (possible infinite loop) — stopped" };
+        const r = execBlock(st.body, scope); if (r && r.__return !== undefined) return r; if (r && r.__break) break;
+      }
+      return null;
+    }
+    if (st.type === "dowhile") {
+      do {
+        if (++steps > MAX_STEPS) throw { line: 0, msg: "program ran too long (possible infinite loop) — stopped" };
+        const r = execBlock(st.body, scope); if (r && r.__return !== undefined) return r; if (r && r.__break) break;
+      } while (truthy(ev(tokenize(st.cond))));
+      return null;
+    }
+    if (st.type === "for") {
+      if (st.init) execLine({ type: "line", text: st.init, n: 0 }, scope, ev);
+      while (!st.cond || truthy(ev(tokenize(st.cond)))) {
+        if (++steps > MAX_STEPS) throw { line: 0, msg: "program ran too long (possible infinite loop) — stopped" };
+        const r = execBlock(st.body, scope); if (r && r.__return !== undefined) return r; if (r && r.__break) break;
+        if (st.upd) execLine({ type: "line", text: st.upd, n: 0 }, scope, makeEval(scope));
+      }
+      return null;
+    }
+    return null;
+  }
+  function execLine(st, scope, ev) {
+    const t = st.text; const n = st.n; let m;
+    // declaration: integer array(n) name
+    if ((m = t.match(/^(integer|float)\s+array\s*\(\s*(\d+)\s*\)\s+([A-Za-z_]\w*)$/))) {
+      declare(scope, m[1], m[3], true, parseInt(m[2], 10)); return null;
+    }
+    // declaration: integer array(?) name  (rare at top level)
+    if ((m = t.match(/^(integer|float)\s+array\s*\(\s*\??\s*\)\s+([A-Za-z_]\w*)$/))) {
+      declare(scope, m[1], m[2], true, 0); return null;
+    }
+    // scalar declaration
+    if ((m = t.match(/^(integer|float)\s+([A-Za-z_]\w*)$/))) { declare(scope, m[1], m[2], false); return null; }
+    // Put ... to output [with N decimal places]
+    if ((m = t.match(/^Put\s+(.+?)\s+to\s+output(?:\s+with\s+(\d+)\s+decimal\s+places?)?$/))) {
+      const expr = m[1]; const dec = m[2];
+      const val = ev(tokenize(expr));
+      output += formatVal(val, dec); return null;
+    }
+    // x = Get next input
+    if ((m = t.match(/^([A-Za-z_]\w*)\s*=\s*Get\s+next\s+[Ii]nput$/))) {
+      const name = m[1];
+      if (!(name in scope.vars)) declare(scope, guessType(inputs[inIdx]), name, false);
+      if (inIdx >= inputs.length) throw { line: n, msg: "ran out of input values — add more in the Input box" };
+      const raw = inputs[inIdx++];
+      const declared = (scope.types && scope.types[name]) || guessType(raw);
+      scope.vars[name] = declared === "float" ? F(parseFloat(raw)) : I(parseInt(raw, 10));
+      return null;
+    }
+    // array element assignment: name[idx] = expr   OR   name.size = expr
+    if ((m = t.match(/^([A-Za-z_]\w*)\s*\[(.+)\]\s*=\s*(.+)$/))) {
+      const name = m[1]; const idxExpr = m[2]; const rhs = m[3];
+      const cell = scope.vars[name]; if (!cell || !cell.arr) throw { line: n, msg: `"${name}" is not an array` };
+      const idx = Math.trunc(ev(tokenize(idxExpr)).v);
+      if (idx < 0 || idx >= cell.arr.length) throw { line: n, msg: `array index ${idx} is out of range (0..${cell.arr.length - 1}) — program ends` };
+      let val;
+      if (/^Get\s+next\s+[Ii]nput$/.test(rhs.trim())) {
+        if (inIdx >= inputs.length) throw { line: n, msg: "ran out of input values — add more in the Input box" };
+        const raw = inputs[inIdx++];
+        val = cell.elemType === "float" ? F(parseFloat(raw)) : I(parseInt(raw, 10));
+      } else val = ev(tokenize(rhs));
+      cell.arr[idx] = cell.elemType === "float" ? F(val.v) : (val.f && cell.elemType === "integer" ? I(val.v) : val);
+      return null;
+    }
+    if ((m = t.match(/^([A-Za-z_]\w*)\.size\s*=\s*(.+)$/))) {
+      const name = m[1]; const cell = scope.vars[name] || (scope.vars[name] = { arr: [], elemType: "integer" });
+      const sz = Math.trunc(ev(tokenize(m[2])).v);
+      while (cell.arr.length < sz) cell.arr.push(cell.elemType === "float" ? F(0) : I(0));
+      cell.arr.length = sz; return null;
+    }
+    // explicit return
+    if ((m = t.match(/^return\s+(.+)$/))) { return { __return: ev(tokenize(m[1])) }; }
+    if (/^return$/.test(t)) { return { __return: I(0) }; }
+    // scalar assignment: name = expr
+    if ((m = t.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/))) {
+      const name = m[1]; const val = ev(tokenize(m[2]));
+      const declared = scope.types && scope.types[name];
+      if (val.arr) { scope.vars[name] = val; return null; }
+      if (declared === "integer") scope.vars[name] = I(val.v);
+      else if (declared === "float") scope.vars[name] = F(val.v);
+      else { scope.vars[name] = val.s !== undefined ? val : (val.f ? F(val.v) : I(val.v)); scope.types = scope.types || {}; scope.types[name] = val.f ? "float" : "integer"; }
+      return null;
+    }
+    // bare function call statement
+    if ((m = t.match(/^([A-Za-z_]\w*)\s*\((.*)\)$/))) {
+      const name = m[1]; const argStr = m[2].trim();
+      const args = [];
+      if (argStr) {
+        // split top-level commas
+        splitArgs(argStr).forEach(a => args.push(ev(tokenize(a))));
+      }
+      callFunction(name, args); return null;
+    }
+    throw { line: n, msg: `I don't recognize this statement: "${t}"` };
+  }
+  function splitArgs(s) {
+    const out = []; let depth = 0, cur = "";
+    for (const c of s) {
+      if (c === "(" || c === "[") depth++;
+      if (c === ")" || c === "]") depth--;
+      if (c === "," && depth === 0) { out.push(cur); cur = ""; } else cur += c;
+    }
+    if (cur.trim()) out.push(cur);
+    return out;
+  }
+  function guessType(raw) { return raw !== undefined && /[.]/.test(raw) ? "float" : "integer"; }
+  function formatVal(val, dec) {
+    if (val.s !== undefined) return val.s.replace(/\\n/g, "\n");
+    if (val.b) return val.v === 1 ? "true" : "false";
+    if (dec !== undefined) return Number(val.v).toFixed(parseInt(dec, 10));
+    if (!val.f) return String(Math.trunc(val.v));
+    // float formatting
+    const v = val.v;
+    if (!isFinite(v)) return v > 0 ? "Infinity" : (v < 0 ? "-Infinity" : "NotANumber");
+    if (Number.isNaN(v)) return "NotANumber";
+    let r = parseFloat(v.toFixed(6));
+    if (Number.isInteger(r)) return r.toFixed(1);
+    return String(r);
+  }
+
+  // ---- run ----
+  try {
+    const top = parseStmts(rawLines, 0, 0);
+    const globalScope = { vars: {}, types: {} };
+    if (functions["Main"]) {
+      callFunction("Main", []);
+    } else {
+      execBlock(top.stmts, globalScope);
+    }
+    // collect simple vars for display
+    const display = {};
+    for (const k in globalScope.vars) {
+      const c = globalScope.vars[k];
+      if (c.arr) display[k] = "[" + c.arr.map(e => formatVal(e)).join(", ") + "]";
+      else display[k] = formatVal(c);
+    }
+    return { ok: true, output, vars: display };
+  } catch (e) {
+    if (e && e.msg) return { ok: false, output, error: `Line ${e.line || "?"}: ${e.msg}` };
+    return { ok: false, output, error: "Something went wrong running that program." };
+  }
 }
 
 // ============================================================
@@ -1833,387 +2277,387 @@ const LESSONS = [
 // ============================================================
 const QUIZ = [
   // 1.1
-  { q: "Consider z = x + y. If x is 10 and y is 20, z is assigned with ____.",
+  { ch:1, q: "Consider z = x + y. If x is 10 and y is 20, z is assigned with ____.",
     options: ["10", "30", "1020", "Error"], answer: 1,
     why: "The process step computes 10 + 20 and stores 30 in z." },
-  { q: "A sequence of instructions that solves a problem is called a(n) ____.",
+  { ch:1, q: "A sequence of instructions that solves a problem is called a(n) ____.",
     options: ["variable", "algorithm", "byte", "flowchart"], answer: 1,
     why: "An algorithm is a step-by-step solution to a problem — the heart of computational thinking." },
-  { q: "To complete a program that computes a triangle's area (x = base * height), the missing step is:",
+  { ch:1, q: "To complete a program that computes a triangle's area (x = base * height), the missing step is:",
     options: ["Multiply x by 2", "Add 2 to x", "Multiply x by 1/2"], answer: 2,
     why: "Triangle area = base × height ÷ 2, so multiply the base*height product by 1/2." },
-  { q: "Turtle steps: Pen down, Forward 50, Left 90, Forward 50, Left 90, Forward 50, Left 90, Forward 50 draws a ____.",
+  { ch:1, q: "Turtle steps: Pen down, Forward 50, Left 90, Forward 50, Left 90, Forward 50, Left 90, Forward 50 draws a ____.",
     options: ["triangle", "square", "circle", "line"], answer: 1,
     why: "Four equal sides with 90° turns between them make a square." },
   // 1.2
-  { q: "A program's execution begins at the ____ node.",
+  { ch:1, q: "A program's execution begins at the ____ node.",
     options: ["Begin", "Input", "Start", "Run"], answer: 2,
     why: "Every Coral flowchart begins at the Start node and flows downward." },
-  { q: "A program's statements execute ____.",
+  { ch:1, q: "A program's statements execute ____.",
     options: ["all at once", "sequentially", "randomly", "in reverse"], answer: 1,
     why: "One at a time, top to bottom — the core idea of a program." },
-  { q: "In a Coral flowchart, what shape represents an input OR output statement?",
+  { ch:1, q: "In a Coral flowchart, what shape represents an input OR output statement?",
     options: ["Oval", "Rectangle", "Diamond", "Parallelogram"], answer: 3,
     why: "Parallelograms are input/output; rectangles are processing; ovals are Start/End." },
-  { q: "Which statement assigns variable numCars with the next input value?",
+  { ch:1, q: "Which statement assigns variable numCars with the next input value?",
     options: ["x = Get next input", "numCars = 20", "numCars = Get next input"], answer: 2,
     why: "'variable = Get next input' reads the next input value into that variable." },
-  { q: "x = Get next input, then y = Get next input. The input is: 22 77. What happens?",
+  { ch:1, q: "x = Get next input, then y = Get next input. The input is: 22 77. What happens?",
     options: ["x gets 22, y gets 77", "x gets 77, y gets 22", "both get 22"], answer: 0,
     why: "Each input statement consumes the NEXT value in order: 22 then 77." },
-  { q: "Which of these is a valid string literal?",
+  { ch:1, q: "Which of these is a valid string literal?",
     options: ["Have a nice day", "\" \"", "Hello (no quotes)"], answer: 1,
     why: "A string literal is text inside double quotes. Even \" \" (a single space) counts. No quotes = not a literal." },
-  { q: "What does Put How are you? to output produce (note: no quotes)?",
+  { ch:1, q: "What does Put How are you? to output produce (note: no quotes)?",
     options: ["How are you?", "(Error)", "\"How are you?\""], answer: 1,
     why: "Output text must be a string literal in quotes, or a variable. Bare text with no quotes is an error." },
-  { q: 'What does Put "a\\nb\\nc" to output print?',
+  { ch:1, q: 'What does Put "a\\nb\\nc" to output print?',
     options: ["anbnc", "a b c on one line", "a, b, c each on their own line", "Error"], answer: 2,
     why: "Each \\n is a newline, so the cursor drops down — three lines." },
-  { q: "Given numCars = 9, which statement outputs 9?",
+  { ch:1, q: "Given numCars = 9, which statement outputs 9?",
     options: ['Put "numCars" to output', "Get numCars to output", "Put numCars to output"], answer: 2,
     why: "No quotes = the variable's value (9). With quotes it would print the text numCars." },
-  { q: "Each rectangle or parallelogram in a flowchart contains one ____.",
+  { ch:1, q: "Each rectangle or parallelogram in a flowchart contains one ____.",
     options: ["value", "statement", "variable"], answer: 1,
     why: "Each node holds exactly one statement (one action)." },
   // 1.3
-  { q: "Is this a valid Coral comment?   // Determine total //",
+  { ch:1, q: "Is this a valid Coral comment?   // Determine total //",
     options: ["Valid", "Invalid"], answer: 0,
     why: "Everything after the first // is the comment; extra slashes are just part of the text." },
-  { q: "Is this a valid Coral comment?   / Get time from user",
+  { ch:1, q: "Is this a valid Coral comment?   / Get time from user",
     options: ["Valid", "Invalid"], answer: 1,
     why: "A comment needs TWO forward slashes (//). A single / is invalid." },
-  { q: "Assuming y is 3 and z is 5, what does x get in:   x =y+z",
+  { ch:1, q: "Assuming y is 3 and z is 5, what does x get in:   x =y+z",
     options: ["8", "35", "Error — bad spacing"], answer: 0,
     why: "Whitespace between items is ignored, so this is just x = y + z = 8." },
-  { q: "Is   num Cars = 2 5   a valid statement?",
+  { ch:1, q: "Is   num Cars = 2 5   a valid statement?",
     options: ["Yes, numCars gets 25", "No — Error"], answer: 1,
     why: "You can't put a space inside a name or a number. 'num Cars' and '2 5' aren't valid items." },
   // 1.4
-  { q: "Reducing switch sizes by half about every two years is known as ____.",
+  { ch:1, q: "Reducing switch sizes by half about every two years is known as ____.",
     options: ["Binary Law", "Moore's Law", "ASCII", "the information age"], answer: 1,
     why: "Moore's Law describes switches (transistors) halving in size roughly every 2 years." },
-  { q: "The information age has covered about 100 years.",
+  { ch:1, q: "The information age has covered about 100 years.",
     options: ["True", "False"], answer: 1,
     why: "It began only in the 1990s — just a few decades ago." },
-  { q: "For many thousands of years, most humans lived as farmers (the agricultural age).",
+  { ch:1, q: "For many thousands of years, most humans lived as farmers (the agricultural age).",
     options: ["True", "False"], answer: 0,
     why: "The agricultural age lasted thousands of years before the industrial age." },
   // 1.5
-  { q: "An embedded computer is a computer inside a desktop or laptop.",
+  { ch:1, q: "An embedded computer is a computer inside a desktop or laptop.",
     options: ["True", "False"], answer: 1,
     why: "Embedded means inside ANOTHER device — a car, TV, thermostat — not inside a PC." },
-  { q: "Which is more popular today?",
+  { ch:1, q: "Which is more popular today?",
     options: ["Desktops", "Smartphones", "Tablets"], answer: 1,
     why: "Smartphones far outsell desktops and tablets; desktop use keeps falling." },
   // 1.6
-  { q: "A single 0 or 1 is called a ____.",
+  { ch:1, q: "A single 0 or 1 is called a ____.",
     options: ["byte", "bit", "nibble", "digit"], answer: 1,
     why: "A single binary digit (0 or 1) is a bit. Eight bits make a byte." },
-  { q: "How many bits are in 101100?",
+  { ch:1, q: "How many bits are in 101100?",
     options: ["4", "5", "6", "8"], answer: 2,
     why: "Count the digits: 1-0-1-1-0-0 = 6 bits." },
-  { q: "What is binary 1100 as a decimal number?",
+  { ch:1, q: "What is binary 1100 as a decimal number?",
     options: ["3", "12", "24", "1100"], answer: 1,
     why: "From the left: 8 + 4 + 0 + 0 = 12." },
-  { q: "What is 7 as a 4-bit binary number?",
+  { ch:1, q: "What is 7 as a 4-bit binary number?",
     options: ["1110", "0101", "0111", "1000"], answer: 2,
     why: "7 = 4 + 2 + 1, so bits 4, 2, 1 are on: 0111." },
-  { q: "ASCII uses how many bits per character code?",
+  { ch:1, q: "ASCII uses how many bits per character code?",
     options: ["4", "7", "8", "16"], answer: 1,
     why: "ASCII uses 7 bits, giving 128 possible characters. Unicode uses more." },
-  { q: "The 7-bit ASCII codes for 'A' (65) and 'a' (97) are the same.",
+  { ch:1, q: "The 7-bit ASCII codes for 'A' (65) and 'a' (97) are the same.",
     options: ["True", "False"], answer: 1,
     why: "Upper and lower case are DIFFERENT characters with different codes." },
   // 1.7
-  { q: "Three sock types are pulled one at a time and kept. After pulling A, B, C, the 4th sock must match one of them.",
+  { ch:1, q: "Three sock types are pulled one at a time and kept. After pulling A, B, C, the 4th sock must match one of them.",
     options: ["True", "False"], answer: 0,
     why: "With only 3 types, a 4th sock has to repeat one you already hold — a guaranteed pair." },
-  { q: "Sorting 1000 name tags by dropping them into 26 letter stacks first, then sorting each, resembles which real algorithm?",
+  { ch:1, q: "Sorting 1000 name tags by dropping them into 26 letter stacks first, then sorting each, resembles which real algorithm?",
     options: ["binary search", "radix sort", "turtle graphics"], answer: 1,
     why: "Bucketing by letter then sorting each bucket is the idea behind radix sort." },
   // 1.8
-  { q: "The '2022 best jobs' rankings were based on what?",
+  { ch:1, q: "The '2022 best jobs' rankings were based on what?",
     options: ["Salary only", "Job security only", "Multiple factors (salary, growth, work-life balance)"], answer: 2,
     why: "Rankings combine several factors, not just one." },
-  { q: "Software developers spend nearly all their time alone at a computer.",
+  { ch:1, q: "Software developers spend nearly all their time alone at a computer.",
     options: ["True", "False"], answer: 1,
     why: "Developers often work in teams, combining creativity and technical skill." },
-  { q: "A survey asks: minutes spent? __Under 5  __6 or more. What's wrong?",
+  { ch:1, q: "A survey asks: minutes spent? __Under 5  __6 or more. What's wrong?",
     options: ["Nothing", "Exactly 5 minutes is not a choice", "It should say 'more than 6'"], answer: 1,
     why: "The gap: 5 (and the range 5-6) fits neither option — imprecise categories. This is computational thinking." },
   // 1.9
-  { q: "Whitespace ____ important in program output.",
+  { ch:1, q: "Whitespace ____ important in program output.",
     options: ["is", "is not"], answer: 0,
     why: "Graded output must match exactly, including spaces and newlines." },
-  { q: "In programming, = and == mean the same thing.",
+  { ch:1, q: "In programming, = and == mean the same thing.",
     options: ["True", "False"], answer: 1,
     why: "= assigns a value; == compares two values. Confusing them is a classic bug." },
-  { q: "A program's output is missing a newline at the end of a line. The likely effect:",
+  { ch:1, q: "A program's output is missing a newline at the end of a line. The likely effect:",
     options: ["No effect", "The next text runs onto the same line", "The program crashes"], answer: 1,
     why: "Without a newline, following text appears on the same line — messy, unprofessional output." },
   // 1.10
-  { q: "Pseudocode is intended primarily for machines to read and execute.",
+  { ch:1, q: "Pseudocode is intended primarily for machines to read and execute.",
     options: ["True", "False"], answer: 1,
     why: "Pseudocode is an INFORMAL, textual description for HUMANS. It isn't executed." },
-  { q: "In the pseudocode: wage=20 / salary=wage*40*52 / Put \"Salary is\" / Put salary — how many statements?",
+  { ch:1, q: "In the pseudocode: wage=20 / salary=wage*40*52 / Put \"Salary is\" / Put salary — how many statements?",
     options: ["1", "3", "4"], answer: 2,
     why: "One statement per line: four lines = four statements." },
-  { q: "Each program statement either gets input, ____ data, or puts output.",
+  { ch:1, q: "Each program statement either gets input, ____ data, or puts output.",
     options: ["counts", "processes", "throws away"], answer: 1,
     why: "The three jobs are input, PROCESS, and output." },
 
   // ===== CHAPTER 2 =====
   // 2.1
-  { q: "In Coral, x = 5 means:",
+  { ch:2, q: "In Coral, x = 5 means:",
     options: ["x equals 5 (a comparison)", "x is assigned the value 5", "5 is compared to x"], answer: 1,
     why: "= is assignment — it PUTS 5 into x. It is not an equality test." },
-  { q: "Which is a VALID assignment statement?",
+  { ch:2, q: "Which is a VALID assignment statement?",
     options: ["x + 1 = 3", "x + y = y + x", "x = y + 2"], answer: 2,
     why: "The left side of = must be a single variable." },
-  { q: "After x = 5, then x = x + 1, what is x?",
+  { ch:2, q: "After x = 5, then x = x + 1, what is x?",
     options: ["5", "6", "51"], answer: 1,
     why: "Reads the current x (5), adds 1, overwrites → 6." },
   // 2.2
-  { q: "What is an integer variable's initial value in Coral?",
+  { ch:2, q: "What is an integer variable's initial value in Coral?",
     options: ["0", "1", "Unknown"], answer: 0,
     why: "Integers auto-initialize to 0." },
-  { q: "Coral's integer range is about:",
+  { ch:2, q: "Coral's integer range is about:",
     options: ["0 to 255", "-2 billion to +2 billion", "unlimited"], answer: 1,
     why: "Max is ~2,147,483,647 — computer memory is limited." },
-  { q: "How do you write the integer literal for one million, three hundred thirty-three thousand?",
+  { ch:2, q: "How do you write the integer literal for one million, three hundred thirty-three thousand?",
     options: ["1,333,000", "1333000", "1_333_000"], answer: 1,
     why: "Integer literals never contain commas." },
   // 2.3
-  { q: "Which is a VALID identifier?",
+  { ch:2, q: "Which is a VALID identifier?",
     options: ["3rdPlace", "_numCars", "thirdPlace"], answer: 2,
     why: "Identifiers must start with a letter — no leading digit or underscore." },
-  { q: "Are numCats and NumCats the same identifier?",
+  { ch:2, q: "Are numCats and NumCats the same identifier?",
     options: ["Yes", "No — identifiers are case sensitive"], answer: 1,
     why: "Upper and lower case letters differ." },
-  { q: "Which word can NOT be used as an identifier?",
+  { ch:2, q: "Which word can NOT be used as an identifier?",
     options: ["userAge", "integer", "total2"], answer: 1,
     why: "'integer' is a reserved word (keyword)." },
   // 2.4
-  { q: "With x = 3, what does 5 * x + 1 evaluate to?",
+  { ch:2, q: "With x = 3, what does 5 * x + 1 evaluate to?",
     options: ["16", "20", "18"], answer: 0,
     why: "* before +: (5 × 3) + 1 = 16." },
-  { q: "Which has the HIGHEST precedence in an expression?",
+  { ch:2, q: "Which has the HIGHEST precedence in an expression?",
     options: ["+", "*", "parentheses ( )"], answer: 2,
     why: "Parentheses are always evaluated first." },
   // 2.10
-  { q: "What is 7 / 2 in Coral?",
+  { ch:2, q: "What is 7 / 2 in Coral?",
     options: ["3.5", "3", "4"], answer: 1,
     why: "Integer division truncates — the .5 is dropped." },
-  { q: "What is 10 / 4.0 in Coral?",
+  { ch:2, q: "What is 10 / 4.0 in Coral?",
     options: ["2", "2.5", "3"], answer: 1,
     why: "A float operand triggers true floating-point division." },
-  { q: "What happens on an integer divide-by-zero?",
+  { ch:2, q: "What happens on an integer divide-by-zero?",
     options: ["Returns 0", "Runtime error — the program terminates", "Returns Infinity"], answer: 1,
     why: "A zero divisor crashes the program." },
   // 2.7
-  { q: "What is 12.0 / 0.0 in Coral?",
+  { ch:2, q: "What is 12.0 / 0.0 in Coral?",
     options: ["Error / crash", "Infinity", "0"], answer: 1,
     why: "A float ÷ 0 gives Infinity (or -Infinity), NOT a crash." },
   // 2.12
-  { q: "What does 23 % 10 evaluate to?",
+  { ch:2, q: "What does 23 % 10 evaluate to?",
     options: ["2", "3", "13"], answer: 1,
     why: "Modulo returns the remainder: 23 = 2×10 + 3." },
-  { q: "Which expression is INVALID?",
+  { ch:2, q: "Which expression is INVALID?",
     options: ["23 % 10", "10 % 4.0", "137 % 60"], answer: 1,
     why: "Modulo needs integer operands; 4.0 is a float." },
   // 2.11
-  { q: "How do you cast integer n to a float?",
+  { ch:2, q: "How do you cast integer n to a float?",
     options: ["Multiply by 1.0 (n * 1.0)", "Divide by 1", "Add 0"], answer: 0,
     why: "Multiplying by 1.0 forces floating-point math." },
-  { q: "Converting the float 4.9 to an integer gives:",
+  { ch:2, q: "Converting the float 4.9 to an integer gives:",
     options: ["5", "4", "0"], answer: 1,
     why: "The fraction is dropped — not rounded." },
   // 2.9
-  { q: "How many values can RandomNumber(0, 25) return?",
+  { ch:2, q: "How many values can RandomNumber(0, 25) return?",
     options: ["25", "26", "24"], answer: 1,
     why: "high − low + 1 = 25 − 0 + 1 = 26 (both ends included)." },
   // 2.13 / 2.14
-  { q: "A value that is only true or false is a:",
+  { ch:2, q: "A value that is only true or false is a:",
     options: ["character", "Boolean", "string"], answer: 1,
     why: "A Boolean has exactly two possible values." },
-  { q: "A named value that CANNOT change is a:",
+  { ch:2, q: "A named value that CANNOT change is a:",
     options: ["variable", "constant", "literal"], answer: 1,
     why: "A constant is fixed; convention names it UPPER_CASE." },
 
   // ===== CHAPTER 3 =====
   // 3.1
-  { q: "In an if-else branch, how many of the two branches run?",
+  { ch:3, q: "In an if-else branch, how many of the two branches run?",
     options: ["Both", "Exactly one", "None or one"], answer: 1,
     why: "If the condition is true the if block runs, otherwise the else — exactly one." },
-  { q: "In an if-elseif-else chain, which branch runs?",
+  { ch:3, q: "In an if-elseif-else chain, which branch runs?",
     options: ["Every true one", "Only the first true one", "Only the else"], answer: 1,
     why: "The first condition that is true runs; the rest are skipped." },
   // 3.2
-  { q: "Three SEPARATE if statements in a row — how many can run?",
+  { ch:3, q: "Three SEPARATE if statements in a row — how many can run?",
     options: ["Exactly one", "More than one", "None"], answer: 1,
     why: "Each if is independent, so several branches may run." },
   // 3.3
-  { q: "Which is the equality operator?",
+  { ch:3, q: "Which is the equality operator?",
     options: ["=", "==", "!="], answer: 1,
     why: "== tests equality; = is assignment; != tests 'not equal'." },
-  { q: "Should you compare two floats with == ?",
+  { ch:3, q: "Should you compare two floats with == ?",
     options: ["Yes, always", "No — floats are imprecise", "Only if positive"], answer: 1,
     why: "Float representation is inexact; use a close-enough check instead." },
-  { q: "Which lists the four relational operators?",
+  { ch:3, q: "Which lists the four relational operators?",
     options: ["< > <= >=", "= == != <>", "< > =< =>"], answer: 0,
     why: "less, greater, less-or-equal, greater-or-equal. =< and => are invalid." },
   // 3.5
-  { q: "(a) and (b) is true when:",
+  { ch:3, q: "(a) and (b) is true when:",
     options: ["at least one is true", "both are true", "neither is true"], answer: 1,
     why: "'and' requires BOTH operands to be true." },
-  { q: "(a) or (b) is true when:",
+  { ch:3, q: "(a) or (b) is true when:",
     options: ["both are true", "at least one is true", "both are false"], answer: 1,
     why: "'or' is true when at least one operand is true." },
-  { q: "How do you write 'x is between 0 and 10' in Coral?",
+  { ch:3, q: "How do you write 'x is between 0 and 10' in Coral?",
     options: ["0 < x < 10", "(0 < x) and (x < 10)", "x > 0 or x < 10"], answer: 1,
     why: "You can't chain comparisons; join two with and." },
   // 3.6
-  { q: "Among logical operators, which has the HIGHEST precedence?",
+  { ch:3, q: "Among logical operators, which has the HIGHEST precedence?",
     options: ["or", "and", "not"], answer: 2,
     why: "Order is not → and → or; not is highest, or is lowest." },
-  { q: "x == 5 or y == 10 and z != 10 is grouped as:",
+  { ch:3, q: "x == 5 or y == 10 and z != 10 is grouped as:",
     options: ["((x==5) or (y==10)) and (z!=10)", "(x==5) or ((y==10) and (z!=10))", "left to right"], answer: 1,
     why: "'and' binds tighter than 'or'." },
   // 3.8
-  { q: "The tiny threshold used to compare floats 'close enough' is called:",
+  { ch:3, q: "The tiny threshold used to compare floats 'close enough' is called:",
     options: ["a delta", "an epsilon", "a margin"], answer: 1,
     why: "AbsoluteValue(x - y) < epsilon (often 0.0001)." },
 
   // ===== CHAPTER 4 =====
-  {q:"How is an infinite loop most commonly created by accident?", options:["Forgetting to update the variable tested in the loop expression","Initializing the loop variable to 0","Using a for loop instead of a while loop"], answer:0, why:"If the tested variable never changes, the expression stays true forever."},
-  {q:"What is a sentinel value?", options:["The average of a list","A special value marking the end of an input list","The number of iterations a loop runs"], answer:1, why:"e.g. 0 ends the list 10 1 6 3 0, and is not part of the computation."},
-  {q:"What are the three parts of a loop that iterates N times?", options:["Start, middle, end","Init, expression, and update of the loop variable","Input, process, output"], answer:1, why:"Initialization before, expression to decide, update at the body's end."},
-  {q:"What is the key difference between a while loop and a do-while loop?", options:["do-while checks the condition after the body, so it runs at least once","while can only use == in its expression","do-while cannot use input"], answer:0, why:"while checks first (may run 0 times); do-while checks after (runs >= 1 time)."},
-  {q:"Which control structure is guaranteed to execute its body at least one time?", options:["while loop","for loop","do-while loop"], answer:2, why:"The do-while condition is evaluated only after the body runs."},
-  {q:"Which loop is best when you don't know how many iterations you need?", options:["for loop","while loop","No loop can do that"], answer:1, why:"while suits an unknown count, e.g. iterate until input is 0."},
-  {q:"Which loop is best when you know exactly how many times to iterate?", options:["for loop","do-while loop","while loop only"], answer:0, why:"A for loop naturally describes iterating a set number of times."},
-  {q:"For 'for i = 0; i < 3; i = i + 1', what values does i take inside the body?", options:["0, 1, 2, 3","0, 1, 2","1, 2, 3"], answer:1, why:"When i reaches 3, i < 3 is false so the body doesn't run."},
-  {q:"To make a loop iterate exactly 10 times starting at i = 0, the expression is:", options:["i < 9","i < 10","i <= 10"], answer:1, why:"i takes 0 through 9, which is 10 iterations."},
-  {q:"How many times does the loop variable initialization (i = 0) execute?", options:["Once","Once per iteration","Zero times"], answer:0, why:"Initialization runs a single time before the loop begins."},
-  {q:"A common error is to write the loop expression as the opposite of what's intended, because:", options:["The expression describes when the loop should iterate, not when it should exit","Coral requires == in all loops","Loops always run backward"], answer:0, why:"e.g. use x != 0 (keep looping) not x == 0."},
-  {q:"Output pseudocode: x=10; while x>4 { Put x; Put \" \"; x=x-2 }", options:["10 9 8 7 6 5","10 8 6","10 8 6 4"], answer:1, why:"Prints 10, 8, 6; then 4 > 4 is false and it stops."},
-  {q:"In a for loop header, semicolons separate:", options:["Each output statement","The initialization, expression, and update","Nested loops"], answer:1, why:"for init; expression; update — no semicolon at the end."},
-  {q:"In a nested loop, how many total times does the inner body run for a 4x3 nesting?", options:["7","12","4"], answer:1, why:"Inner runs fully (3) on each of the 4 outer iterations: 4 x 3 = 12."},
-  {q:"A program outputs even numbers from 2 to 50. Best control structure?", options:["if statement","for loop","do-while loop"], answer:1, why:"The count is known/computable, so a for loop fits."},
-  {q:"Get input, convert, and repeat until the input is zero. Best control structure?", options:["while loop","for loop","if statement"], answer:0, why:"Unknown iteration count ending on a sentinel suits a while loop."},
-  {q:"Which statement about for and while loops is true?", options:["All for loops can be rewritten as equivalent while loops","for loops cannot use input","while loops always run at least once"], answer:0, why:"A for loop is just a compact form of a common while pattern."},
-  {q:"When finding a max by looping, each value after the first is compared using:", options:["maxSoFar > currValue","currValue > maxSoFar","currValue == maxSoFar"], answer:1, why:"If the current value is greater, it replaces the max-so-far."},
+  { ch:4,q:"How is an infinite loop most commonly created by accident?", options:["Forgetting to update the variable tested in the loop expression","Initializing the loop variable to 0","Using a for loop instead of a while loop"], answer:0, why:"If the tested variable never changes, the expression stays true forever."},
+  { ch:4,q:"What is a sentinel value?", options:["The average of a list","A special value marking the end of an input list","The number of iterations a loop runs"], answer:1, why:"e.g. 0 ends the list 10 1 6 3 0, and is not part of the computation."},
+  { ch:4,q:"What are the three parts of a loop that iterates N times?", options:["Start, middle, end","Init, expression, and update of the loop variable","Input, process, output"], answer:1, why:"Initialization before, expression to decide, update at the body's end."},
+  { ch:4,q:"What is the key difference between a while loop and a do-while loop?", options:["do-while checks the condition after the body, so it runs at least once","while can only use == in its expression","do-while cannot use input"], answer:0, why:"while checks first (may run 0 times); do-while checks after (runs >= 1 time)."},
+  { ch:4,q:"Which control structure is guaranteed to execute its body at least one time?", options:["while loop","for loop","do-while loop"], answer:2, why:"The do-while condition is evaluated only after the body runs."},
+  { ch:4,q:"Which loop is best when you don't know how many iterations you need?", options:["for loop","while loop","No loop can do that"], answer:1, why:"while suits an unknown count, e.g. iterate until input is 0."},
+  { ch:4,q:"Which loop is best when you know exactly how many times to iterate?", options:["for loop","do-while loop","while loop only"], answer:0, why:"A for loop naturally describes iterating a set number of times."},
+  { ch:4,q:"For 'for i = 0; i < 3; i = i + 1', what values does i take inside the body?", options:["0, 1, 2, 3","0, 1, 2","1, 2, 3"], answer:1, why:"When i reaches 3, i < 3 is false so the body doesn't run."},
+  { ch:4,q:"To make a loop iterate exactly 10 times starting at i = 0, the expression is:", options:["i < 9","i < 10","i <= 10"], answer:1, why:"i takes 0 through 9, which is 10 iterations."},
+  { ch:4,q:"How many times does the loop variable initialization (i = 0) execute?", options:["Once","Once per iteration","Zero times"], answer:0, why:"Initialization runs a single time before the loop begins."},
+  { ch:4,q:"A common error is to write the loop expression as the opposite of what's intended, because:", options:["The expression describes when the loop should iterate, not when it should exit","Coral requires == in all loops","Loops always run backward"], answer:0, why:"e.g. use x != 0 (keep looping) not x == 0."},
+  { ch:4,q:"Output pseudocode: x=10; while x>4 { Put x; Put \" \"; x=x-2 }", options:["10 9 8 7 6 5","10 8 6","10 8 6 4"], answer:1, why:"Prints 10, 8, 6; then 4 > 4 is false and it stops."},
+  { ch:4,q:"In a for loop header, semicolons separate:", options:["Each output statement","The initialization, expression, and update","Nested loops"], answer:1, why:"for init; expression; update — no semicolon at the end."},
+  { ch:4,q:"In a nested loop, how many total times does the inner body run for a 4x3 nesting?", options:["7","12","4"], answer:1, why:"Inner runs fully (3) on each of the 4 outer iterations: 4 x 3 = 12."},
+  { ch:4,q:"A program outputs even numbers from 2 to 50. Best control structure?", options:["if statement","for loop","do-while loop"], answer:1, why:"The count is known/computable, so a for loop fits."},
+  { ch:4,q:"Get input, convert, and repeat until the input is zero. Best control structure?", options:["while loop","for loop","if statement"], answer:0, why:"Unknown iteration count ending on a sentinel suits a while loop."},
+  { ch:4,q:"Which statement about for and while loops is true?", options:["All for loops can be rewritten as equivalent while loops","for loops cannot use input","while loops always run at least once"], answer:0, why:"A for loop is just a compact form of a common while pattern."},
+  { ch:4,q:"When finding a max by looping, each value after the first is compared using:", options:["maxSoFar > currValue","currValue > maxSoFar","currValue == maxSoFar"], answer:1, why:"If the current value is greater, it replaces the max-so-far."},
 
   // ===== CHAPTER 5 =====
-  {q:"In Coral, what is the index of the first element of an array?", options:["1","0","-1"], answer:1, why:"Coral arrays are zero-based; the first element is index 0."},
-  {q:"An array is declared with size 3. What is the index of the last element?", options:["3","4","2"], answer:2, why:"Last index = size - 1 = 2."},
-  {q:"If an array's last index is 499, how many elements does it have?", options:["499","500","501"], answer:1, why:"Elements = last index + 1 = 500."},
-  {q:"Which correctly declares an integer array named numList with 5 elements?", options:["integer numList array(5)","integer array(5) numList","array integer numList[5]"], answer:1, why:"Coral syntax: integer array(5) numList."},
-  {q:"Which assigns the value 250 to element 0 of peoplePerDay?", options:["peoplePerDay[250] = 0","peoplePerDay = 250","peoplePerDay[0] = 250"], answer:2, why:"Index goes in brackets, value on the right."},
-  {q:"Which accesses the first element of itemCounts?", options:["itemCounts[1]","itemCounts[0]","itemCounts.first"], answer:1, why:"First element is at index 0."},
-  {q:"How is an array's number of elements accessed in Coral?", options:["userVals.length","userVals.count","userVals.size"], answer:2, why:"Coral uses the .size attribute."},
-  {q:"Which is the correct standard loop to iterate an array userVals?", options:["for i = 1; i <= userVals.size; i = i + 1","for i = 0; i < userVals.size; i = i + 1","for i = 0; i <= userVals.size; i = i + 1"], answer:1, why:"Start at 0, loop while i < size."},
-  {q:"userVals has size 4. Which access is out of range?", options:["userVals[0]","userVals[3]","userVals[4]"], answer:2, why:"Valid indices are 0..3; index 4 is out of range."},
-  {q:"What happens in Coral when an out-of-range index is accessed?", options:["It returns 0","An error is generated and the program ends","It wraps around to index 0"], answer:1, why:"Coral generates an error and immediately ends the program."},
-  {q:"An array index must be what type?", options:["Any numeric type including floats","An integer type","A string"], answer:1, why:"The index must be an integer; floating-point (even 1.0) is not allowed."},
-  {q:"To find the max, how should maxVal be initialized?", options:["maxVal = 0","maxVal = userVals[0]","maxVal = -1"], answer:1, why:"Seed from an actual element so all-negative input works."},
-  {q:"Why is initializing maxVal to 0 a logical error?", options:["0 can't be stored in an integer","For all-negative input the max would wrongly be 0","The loop wouldn't run"], answer:1, why:"0 isn't really the largest value seen so far."},
-  {q:"Which statements correctly swap x and y?", options:["x = y; y = x","tmpVal = x; x = y; y = tmpVal","x = y; y = tmpVal"], answer:1, why:"A temporary variable preserves x's original value."},
-  {q:"After x = y then y = x (x=22, y=99 initially), the result is:", options:["x is 99 and y is 22","x is 99 and y is 99","x is 22 and y is 99"], answer:1, why:"x's old value is lost, so both become 99."},
-  {q:"For the Nth oldest person, which index accesses the Nth person?", options:["oldestPeople[nthPerson]","oldestPeople[nthPerson - 1]","oldestPeople[nthPerson + 1]"], answer:1, why:"Indices start at 0, so the Nth item is at index N-1."},
-  {q:"How many swaps reverse a list of 8 elements?", options:["8","7","4"], answer:2, why:"Swap pairs from the ends inward: N/2 = 4 swaps."},
-  {q:"Which is the best variable type for a list of every month's weight?", options:["scalar","array","neither"], answer:1, why:"A list of many values is best held in an array."},
+  { ch:5,q:"In Coral, what is the index of the first element of an array?", options:["1","0","-1"], answer:1, why:"Coral arrays are zero-based; the first element is index 0."},
+  { ch:5,q:"An array is declared with size 3. What is the index of the last element?", options:["3","4","2"], answer:2, why:"Last index = size - 1 = 2."},
+  { ch:5,q:"If an array's last index is 499, how many elements does it have?", options:["499","500","501"], answer:1, why:"Elements = last index + 1 = 500."},
+  { ch:5,q:"Which correctly declares an integer array named numList with 5 elements?", options:["integer numList array(5)","integer array(5) numList","array integer numList[5]"], answer:1, why:"Coral syntax: integer array(5) numList."},
+  { ch:5,q:"Which assigns the value 250 to element 0 of peoplePerDay?", options:["peoplePerDay[250] = 0","peoplePerDay = 250","peoplePerDay[0] = 250"], answer:2, why:"Index goes in brackets, value on the right."},
+  { ch:5,q:"Which accesses the first element of itemCounts?", options:["itemCounts[1]","itemCounts[0]","itemCounts.first"], answer:1, why:"First element is at index 0."},
+  { ch:5,q:"How is an array's number of elements accessed in Coral?", options:["userVals.length","userVals.count","userVals.size"], answer:2, why:"Coral uses the .size attribute."},
+  { ch:5,q:"Which is the correct standard loop to iterate an array userVals?", options:["for i = 1; i <= userVals.size; i = i + 1","for i = 0; i < userVals.size; i = i + 1","for i = 0; i <= userVals.size; i = i + 1"], answer:1, why:"Start at 0, loop while i < size."},
+  { ch:5,q:"userVals has size 4. Which access is out of range?", options:["userVals[0]","userVals[3]","userVals[4]"], answer:2, why:"Valid indices are 0..3; index 4 is out of range."},
+  { ch:5,q:"What happens in Coral when an out-of-range index is accessed?", options:["It returns 0","An error is generated and the program ends","It wraps around to index 0"], answer:1, why:"Coral generates an error and immediately ends the program."},
+  { ch:5,q:"An array index must be what type?", options:["Any numeric type including floats","An integer type","A string"], answer:1, why:"The index must be an integer; floating-point (even 1.0) is not allowed."},
+  { ch:5,q:"To find the max, how should maxVal be initialized?", options:["maxVal = 0","maxVal = userVals[0]","maxVal = -1"], answer:1, why:"Seed from an actual element so all-negative input works."},
+  { ch:5,q:"Why is initializing maxVal to 0 a logical error?", options:["0 can't be stored in an integer","For all-negative input the max would wrongly be 0","The loop wouldn't run"], answer:1, why:"0 isn't really the largest value seen so far."},
+  { ch:5,q:"Which statements correctly swap x and y?", options:["x = y; y = x","tmpVal = x; x = y; y = tmpVal","x = y; y = tmpVal"], answer:1, why:"A temporary variable preserves x's original value."},
+  { ch:5,q:"After x = y then y = x (x=22, y=99 initially), the result is:", options:["x is 99 and y is 22","x is 99 and y is 99","x is 22 and y is 99"], answer:1, why:"x's old value is lost, so both become 99."},
+  { ch:5,q:"For the Nth oldest person, which index accesses the Nth person?", options:["oldestPeople[nthPerson]","oldestPeople[nthPerson - 1]","oldestPeople[nthPerson + 1]"], answer:1, why:"Indices start at 0, so the Nth item is at index N-1."},
+  { ch:5,q:"How many swaps reverse a list of 8 elements?", options:["8","7","4"], answer:2, why:"Swap pairs from the ends inward: N/2 = 4 swaps."},
+  { ch:5,q:"Which is the best variable type for a list of every month's weight?", options:["scalar","array","neither"], answer:1, why:"A list of many values is best held in an array."},
 
   // ===== CHAPTER 6 =====
-  {q:"A function is best described as:", options:["A single variable","A named list of statements","A type of loop"], answer:1, why:"Core definition"},
-  {q:"A function call causes:", options:["The function's statements to execute","The program to end","A new variable type"], answer:0, why:"Call runs the statements"},
-  {q:"A program's execution begins with which function?", options:["The first defined function","Main","Any function"], answer:1, why:"Main runs first"},
-  {q:"If you define a function but never call it, its statements:", options:["Run once automatically","Never execute","Run at program end"], answer:1, why:"Defined ≠ run"},
-  {q:"A parameter is specified in the:", options:["Function call","Function definition","Main only"], answer:1, why:"Parameter = definition side"},
-  {q:"An argument is:", options:["A value passed to a parameter during a call","The function's name","A local variable"], answer:0, why:"Argument = call side"},
-  {q:"For CalcVal(42, 55, 77), the second parameter b is assigned:", options:["42","55","77"], answer:1, why:"Matched by position"},
-  {q:"How do you call a function that has no parameters?", options:["Just its name","Its name with empty parentheses","You can't call it"], answer:1, why:"Parens still required"},
-  {q:"How many values can a Coral function return?", options:["One","Two","Any number"], answer:0, why:"Single return only"},
-  {q:"A function call evaluates to:", options:["Its returned value","Its name","Nothing ever"], answer:0, why:"Can be used in expressions"},
-  {q:"A function that returns nothing:", options:["Can be used in an expression","Cannot be used in an expression","Must return a number"], answer:1, why:"void can't be in expression"},
-  {q:"A return statement:", options:["Returns a value and immediately exits the function","Prints a value","Declares a variable"], answer:0, why:"return exits immediately"},
-  {q:"What does ComputeSquare(9) return?", options:["3","9","81"], answer:2, why:"9*9=81"},
-  {q:"A function stub is:", options:["A function whose statements aren't yet written","A function that runs faster","A function with no name"], answer:0, why:"Placeholder for planning"},
-  {q:"A key benefit of functions is to:", options:["Make Main run faster","Improve readability and avoid redundant code","Increase redundant statements"], answer:1, why:"Readability + DRY, not speed"},
-  {q:"Modular development means:", options:["Dividing a program into separately developed/tested modules","Writing all code in Main","Never testing until done"], answer:0, why:"Definition"},
-  {q:"To pass an array userNums as an argument, you write:", options:["SomeFct(userNums(10))","SomeFct(userNums)","SomeFct(integer userNums)"], answer:1, why:"Pass array name only"},
-  {q:"Is 'Function MyFct(integer userNum + 5) returns nothing' a valid definition?", options:["Yes","No — a parameter is a declaration, not an expression","Only in Main"], answer:1, why:"Def side can't compute"},
+  { ch:6,q:"A function is best described as:", options:["A single variable","A named list of statements","A type of loop"], answer:1, why:"Core definition"},
+  { ch:6,q:"A function call causes:", options:["The function's statements to execute","The program to end","A new variable type"], answer:0, why:"Call runs the statements"},
+  { ch:6,q:"A program's execution begins with which function?", options:["The first defined function","Main","Any function"], answer:1, why:"Main runs first"},
+  { ch:6,q:"If you define a function but never call it, its statements:", options:["Run once automatically","Never execute","Run at program end"], answer:1, why:"Defined ≠ run"},
+  { ch:6,q:"A parameter is specified in the:", options:["Function call","Function definition","Main only"], answer:1, why:"Parameter = definition side"},
+  { ch:6,q:"An argument is:", options:["A value passed to a parameter during a call","The function's name","A local variable"], answer:0, why:"Argument = call side"},
+  { ch:6,q:"For CalcVal(42, 55, 77), the second parameter b is assigned:", options:["42","55","77"], answer:1, why:"Matched by position"},
+  { ch:6,q:"How do you call a function that has no parameters?", options:["Just its name","Its name with empty parentheses","You can't call it"], answer:1, why:"Parens still required"},
+  { ch:6,q:"How many values can a Coral function return?", options:["One","Two","Any number"], answer:0, why:"Single return only"},
+  { ch:6,q:"A function call evaluates to:", options:["Its returned value","Its name","Nothing ever"], answer:0, why:"Can be used in expressions"},
+  { ch:6,q:"A function that returns nothing:", options:["Can be used in an expression","Cannot be used in an expression","Must return a number"], answer:1, why:"void can't be in expression"},
+  { ch:6,q:"A return statement:", options:["Returns a value and immediately exits the function","Prints a value","Declares a variable"], answer:0, why:"return exits immediately"},
+  { ch:6,q:"What does ComputeSquare(9) return?", options:["3","9","81"], answer:2, why:"9*9=81"},
+  { ch:6,q:"A function stub is:", options:["A function whose statements aren't yet written","A function that runs faster","A function with no name"], answer:0, why:"Placeholder for planning"},
+  { ch:6,q:"A key benefit of functions is to:", options:["Make Main run faster","Improve readability and avoid redundant code","Increase redundant statements"], answer:1, why:"Readability + DRY, not speed"},
+  { ch:6,q:"Modular development means:", options:["Dividing a program into separately developed/tested modules","Writing all code in Main","Never testing until done"], answer:0, why:"Definition"},
+  { ch:6,q:"To pass an array userNums as an argument, you write:", options:["SomeFct(userNums(10))","SomeFct(userNums)","SomeFct(integer userNums)"], answer:1, why:"Pass array name only"},
+  { ch:6,q:"Is 'Function MyFct(integer userNum + 5) returns nothing' a valid definition?", options:["Yes","No — a parameter is a declaration, not an expression","Only in Main"], answer:1, why:"Def side can't compute"},
 
   // ===== CHAPTER 7 =====
-  {q:"An algorithm is best defined as:", options:["A program written in a specific language","A sequence of steps that solves a problem for any valid input","A single test case that produces correct output"], answer:1, why:"Algorithms must be correct for ALL valid inputs."},
-  {q:"If an algorithm gives the correct output for one test input, it is:", options:["Proven correct","Not necessarily correct","Guaranteed efficient"], answer:1, why:"One passing test does not prove correctness."},
-  {q:"Which search checks each element in order from the beginning?", options:["Binary search","Linear search","Heuristic search"], answer:1, why:"Linear search scans one element at a time."},
-  {q:"Which search REQUIRES the list to be sorted?", options:["Linear search","Binary search","Both equally"], answer:1, why:"Binary search needs sorted, directly accessible data."},
-  {q:"Binary search finds the middle index using:", options:["mid = (high + low) / 2, rounded down","mid = high - low","mid = numbers.size / 3"], answer:0, why:"Average the bounds and floor the result."},
-  {q:"In binary search, if the key is greater than the middle element, you next search:", options:["The left (lower) sublist","The right (upper) sublist","The entire list again"], answer:1, why:"Greater key → go to the upper half."},
-  {q:"For an N-element list, the max steps of binary search is:", options:["N","N / 2","floor(log2 N) + 1"], answer:2, why:"Search space halves each step: logarithmic."},
-  {q:"For a list of N elements, linear search requires at most:", options:["log2 N comparisons","N comparisons","1 comparison"], answer:1, why:"Worst case checks all N elements."},
-  {q:"On a sorted list of 500 items, roughly how many comparisons does binary search need?", options:["About 250","Fewer than 10","Exactly 500"], answer:1, why:"Binary search always uses under 10 for 500 items."},
-  {q:"The worst case for linear search occurs when:", options:["The key is at index 0","The key is not in the list (all elements checked)","The list has one element"], answer:1, why:"Not found = maximum comparisons."},
-  {q:"An algorithm's best case is the scenario with:", options:["The maximum number of operations","The minimum number of operations","Exactly N operations"], answer:1, why:"Best case = least possible work."},
-  {q:"Why must input size N remain a variable in complexity analysis?", options:["To make code shorter","Otherwise every best case would be N=0, which is useless","Because memory is fixed"], answer:1, why:"Complexity always treats size as a variable."},
-  {q:"Binary search checks which element first?", options:["The first element","The middle element","The last element"], answer:1, why:"It starts at the middle of the range."},
-  {q:"Which correctly describes both searches on a large SORTED list?", options:["Linear is faster than binary","Binary is far faster than linear","They take the same time"], answer:1, why:"Binary halves the space; linear scans all."},
-  {q:"Computational complexity most commonly measures:", options:["Lines of code and comments","Runtime and memory usage","Number of functions"], answer:1, why:"Resources = runtime + memory."},
-  {q:"Sorting a list means putting it into:", options:["Random order","Ascending or descending order","Reverse insertion order"], answer:1, why:"Sorting orders the elements."},
-  {q:"A heuristic algorithm is one that:", options:["Always finds the optimal solution","Quickly finds a near-optimal/approximate solution","Never terminates"], answer:1, why:"Heuristics trade optimality for speed."},
-  {q:"The 0-1 knapsack problem restricts each item to:", options:["At most 1 of each item","Unlimited copies","At least 2 of each item"], answer:0, why:"0-1 means take each item zero or one times."},
-  {q:"Two algorithms both correctly sort; Algorithm 2's code is more complex but runs faster. Algorithm 2 is:", options:["Incorrect","More time-efficient","Slower"], answer:1, why:"Faster runtime = more time-efficient (both still correct)."},
-  {q:"Binary search terminates when:", options:["It reaches index 0","The key is found or the search space is empty","N reaches 100"], answer:1, why:"Found, or no range remains (returns -1)."},
+  { ch:7,q:"An algorithm is best defined as:", options:["A program written in a specific language","A sequence of steps that solves a problem for any valid input","A single test case that produces correct output"], answer:1, why:"Algorithms must be correct for ALL valid inputs."},
+  { ch:7,q:"If an algorithm gives the correct output for one test input, it is:", options:["Proven correct","Not necessarily correct","Guaranteed efficient"], answer:1, why:"One passing test does not prove correctness."},
+  { ch:7,q:"Which search checks each element in order from the beginning?", options:["Binary search","Linear search","Heuristic search"], answer:1, why:"Linear search scans one element at a time."},
+  { ch:7,q:"Which search REQUIRES the list to be sorted?", options:["Linear search","Binary search","Both equally"], answer:1, why:"Binary search needs sorted, directly accessible data."},
+  { ch:7,q:"Binary search finds the middle index using:", options:["mid = (high + low) / 2, rounded down","mid = high - low","mid = numbers.size / 3"], answer:0, why:"Average the bounds and floor the result."},
+  { ch:7,q:"In binary search, if the key is greater than the middle element, you next search:", options:["The left (lower) sublist","The right (upper) sublist","The entire list again"], answer:1, why:"Greater key → go to the upper half."},
+  { ch:7,q:"For an N-element list, the max steps of binary search is:", options:["N","N / 2","floor(log2 N) + 1"], answer:2, why:"Search space halves each step: logarithmic."},
+  { ch:7,q:"For a list of N elements, linear search requires at most:", options:["log2 N comparisons","N comparisons","1 comparison"], answer:1, why:"Worst case checks all N elements."},
+  { ch:7,q:"On a sorted list of 500 items, roughly how many comparisons does binary search need?", options:["About 250","Fewer than 10","Exactly 500"], answer:1, why:"Binary search always uses under 10 for 500 items."},
+  { ch:7,q:"The worst case for linear search occurs when:", options:["The key is at index 0","The key is not in the list (all elements checked)","The list has one element"], answer:1, why:"Not found = maximum comparisons."},
+  { ch:7,q:"An algorithm's best case is the scenario with:", options:["The maximum number of operations","The minimum number of operations","Exactly N operations"], answer:1, why:"Best case = least possible work."},
+  { ch:7,q:"Why must input size N remain a variable in complexity analysis?", options:["To make code shorter","Otherwise every best case would be N=0, which is useless","Because memory is fixed"], answer:1, why:"Complexity always treats size as a variable."},
+  { ch:7,q:"Binary search checks which element first?", options:["The first element","The middle element","The last element"], answer:1, why:"It starts at the middle of the range."},
+  { ch:7,q:"Which correctly describes both searches on a large SORTED list?", options:["Linear is faster than binary","Binary is far faster than linear","They take the same time"], answer:1, why:"Binary halves the space; linear scans all."},
+  { ch:7,q:"Computational complexity most commonly measures:", options:["Lines of code and comments","Runtime and memory usage","Number of functions"], answer:1, why:"Resources = runtime + memory."},
+  { ch:7,q:"Sorting a list means putting it into:", options:["Random order","Ascending or descending order","Reverse insertion order"], answer:1, why:"Sorting orders the elements."},
+  { ch:7,q:"A heuristic algorithm is one that:", options:["Always finds the optimal solution","Quickly finds a near-optimal/approximate solution","Never terminates"], answer:1, why:"Heuristics trade optimality for speed."},
+  { ch:7,q:"The 0-1 knapsack problem restricts each item to:", options:["At most 1 of each item","Unlimited copies","At least 2 of each item"], answer:0, why:"0-1 means take each item zero or one times."},
+  { ch:7,q:"Two algorithms both correctly sort; Algorithm 2's code is more complex but runs faster. Algorithm 2 is:", options:["Incorrect","More time-efficient","Slower"], answer:1, why:"Faster runtime = more time-efficient (both still correct)."},
+  { ch:7,q:"Binary search terminates when:", options:["It reaches index 0","The key is found or the search space is empty","N reaches 100"], answer:1, why:"Found, or no range remains (returns -1)."},
 
   // ===== CHAPTER 8 =====
-  {q:"What are the four SDLC phases in order?", options:["Design, Analysis, Testing, Implementation","Analysis, Design, Implementation, Testing","Analysis, Implementation, Design, Testing"], answer:1, why:"Analysis → Design → Implementation → Testing."},
-  {q:"Which SDLC phase defines a program's goals?", options:["Analysis","Design","Testing"], answer:0, why:"Analysis defines goals."},
-  {q:"Which SDLC phase defines the specifics of how to build the program?", options:["Analysis","Design","Implementation"], answer:1, why:"Design defines the how."},
-  {q:"In which SDLC phase is the code written?", options:["Design","Implementation","Testing"], answer:1, why:"Implementation involves writing the program."},
-  {q:"Which SDLC phase checks that the program meets its goals?", options:["Analysis","Implementation","Testing"], answer:2, why:"Testing verifies against goals."},
-  {q:"How does waterfall differ from agile?", options:["Waterfall repeats phases; agile does one pass","Waterfall does phases in sequence once; agile does small amounts and repeats","They are identical"], answer:1, why:"Waterfall = one pass; agile = iterative."},
-  {q:"Which approach is more responsive to user feedback?", options:["Waterfall","Agile","Neither"], answer:1, why:"Agile repeats phases, absorbing feedback."},
-  {q:"What does UML stand for?", options:["Universal Machine Language","Unified Modeling Language","Unified Method Library"], answer:1, why:"Unified Modeling Language."},
-  {q:"A structural UML diagram visualizes what?", options:["Dynamic behavior like flow","Static elements like variables and functions","Only user actions"], answer:1, why:"Structural = static elements."},
-  {q:"A behavioral UML diagram visualizes what?", options:["Static variables and functions","Dynamic behavior, such as flow of an algorithm","Only class inheritance"], answer:1, why:"Behavioral = dynamic behavior."},
-  {q:"Which UML diagram is structural?", options:["Use case diagram","Class diagram","Sequence diagram"], answer:1, why:"Class diagram is the structural one."},
-  {q:"Which set of UML diagrams are all behavioral?", options:["Class, use case, activity","Use case, activity, sequence","Class, sequence, activity"], answer:1, why:"Use case, activity, and sequence are behavioral."},
-  {q:"An activity diagram is best described as a:", options:["Flowchart (behavioral)","Class blueprint (structural)","List of components"], answer:0, why:"Activity diagram is a flowchart, behavioral."},
-  {q:"A use case diagram is used to model:", options:["How a user interacts with a program","Member variable data types","The order of server responses"], answer:0, why:"Use case shows user interaction."},
-  {q:"A class diagram is used to model:", options:["How a user interacts with a program","A program's classes with data members and functions","The sequence of events for a scenario"], answer:1, why:"Class diagram models classes."},
-  {q:"A sequence diagram is used to show:", options:["Static variable types","Interaction between components and the order of events","A list of build components"], answer:1, why:"Sequence shows interactions and event order."},
-  {q:"Which UML diagram fits the analysis phase?", options:["Use case diagram","Class diagram","Sequence diagram"], answer:0, why:"Analysis → use case diagram."},
-  {q:"Which UML diagram fits the design phase?", options:["Use case diagram","Class diagram","Activity diagram"], answer:1, why:"Design → class diagram."},
-  {q:"Which UML diagram fits the implementation phase?", options:["Class diagram","Activity diagram","Sequence diagram"], answer:1, why:"Implementation → activity diagram."},
-  {q:"Which UML diagram fits the testing phase?", options:["Class diagram","Sequence diagram","Use case diagram"], answer:1, why:"Testing → sequence diagram."},
-  {q:"Do use case and sequence diagrams contain program code?", options:["Yes, both","No, neither","Only sequence diagrams do"], answer:1, why:"UML diagrams model software, not code."},
-  {q:"Which UML diagram always indicates the order of events?", options:["Use case diagram","Sequence diagram","Class diagram"], answer:1, why:"Sequence always indicates order; use case does not."},
-  {q:"In an agile approach, the maximum number of times the implementation phase runs is:", options:["0","1","No max"], answer:2, why:"Agile repeats phases, no max."},
-  {q:"Can UML diagrams be used in both waterfall and agile approaches?", options:["Yes","No, waterfall only","No, agile only"], answer:0, why:"UML applies to either approach."},
+  { ch:8,q:"What are the four SDLC phases in order?", options:["Design, Analysis, Testing, Implementation","Analysis, Design, Implementation, Testing","Analysis, Implementation, Design, Testing"], answer:1, why:"Analysis → Design → Implementation → Testing."},
+  { ch:8,q:"Which SDLC phase defines a program's goals?", options:["Analysis","Design","Testing"], answer:0, why:"Analysis defines goals."},
+  { ch:8,q:"Which SDLC phase defines the specifics of how to build the program?", options:["Analysis","Design","Implementation"], answer:1, why:"Design defines the how."},
+  { ch:8,q:"In which SDLC phase is the code written?", options:["Design","Implementation","Testing"], answer:1, why:"Implementation involves writing the program."},
+  { ch:8,q:"Which SDLC phase checks that the program meets its goals?", options:["Analysis","Implementation","Testing"], answer:2, why:"Testing verifies against goals."},
+  { ch:8,q:"How does waterfall differ from agile?", options:["Waterfall repeats phases; agile does one pass","Waterfall does phases in sequence once; agile does small amounts and repeats","They are identical"], answer:1, why:"Waterfall = one pass; agile = iterative."},
+  { ch:8,q:"Which approach is more responsive to user feedback?", options:["Waterfall","Agile","Neither"], answer:1, why:"Agile repeats phases, absorbing feedback."},
+  { ch:8,q:"What does UML stand for?", options:["Universal Machine Language","Unified Modeling Language","Unified Method Library"], answer:1, why:"Unified Modeling Language."},
+  { ch:8,q:"A structural UML diagram visualizes what?", options:["Dynamic behavior like flow","Static elements like variables and functions","Only user actions"], answer:1, why:"Structural = static elements."},
+  { ch:8,q:"A behavioral UML diagram visualizes what?", options:["Static variables and functions","Dynamic behavior, such as flow of an algorithm","Only class inheritance"], answer:1, why:"Behavioral = dynamic behavior."},
+  { ch:8,q:"Which UML diagram is structural?", options:["Use case diagram","Class diagram","Sequence diagram"], answer:1, why:"Class diagram is the structural one."},
+  { ch:8,q:"Which set of UML diagrams are all behavioral?", options:["Class, use case, activity","Use case, activity, sequence","Class, sequence, activity"], answer:1, why:"Use case, activity, and sequence are behavioral."},
+  { ch:8,q:"An activity diagram is best described as a:", options:["Flowchart (behavioral)","Class blueprint (structural)","List of components"], answer:0, why:"Activity diagram is a flowchart, behavioral."},
+  { ch:8,q:"A use case diagram is used to model:", options:["How a user interacts with a program","Member variable data types","The order of server responses"], answer:0, why:"Use case shows user interaction."},
+  { ch:8,q:"A class diagram is used to model:", options:["How a user interacts with a program","A program's classes with data members and functions","The sequence of events for a scenario"], answer:1, why:"Class diagram models classes."},
+  { ch:8,q:"A sequence diagram is used to show:", options:["Static variable types","Interaction between components and the order of events","A list of build components"], answer:1, why:"Sequence shows interactions and event order."},
+  { ch:8,q:"Which UML diagram fits the analysis phase?", options:["Use case diagram","Class diagram","Sequence diagram"], answer:0, why:"Analysis → use case diagram."},
+  { ch:8,q:"Which UML diagram fits the design phase?", options:["Use case diagram","Class diagram","Activity diagram"], answer:1, why:"Design → class diagram."},
+  { ch:8,q:"Which UML diagram fits the implementation phase?", options:["Class diagram","Activity diagram","Sequence diagram"], answer:1, why:"Implementation → activity diagram."},
+  { ch:8,q:"Which UML diagram fits the testing phase?", options:["Class diagram","Sequence diagram","Use case diagram"], answer:1, why:"Testing → sequence diagram."},
+  { ch:8,q:"Do use case and sequence diagrams contain program code?", options:["Yes, both","No, neither","Only sequence diagrams do"], answer:1, why:"UML diagrams model software, not code."},
+  { ch:8,q:"Which UML diagram always indicates the order of events?", options:["Use case diagram","Sequence diagram","Class diagram"], answer:1, why:"Sequence always indicates order; use case does not."},
+  { ch:8,q:"In an agile approach, the maximum number of times the implementation phase runs is:", options:["0","1","No max"], answer:2, why:"Agile repeats phases, no max."},
+  { ch:8,q:"Can UML diagrams be used in both waterfall and agile approaches?", options:["Yes","No, waterfall only","No, agile only"], answer:0, why:"UML applies to either approach."},
 
   // ===== CHAPTER 9 =====
-  {q:"Which kind of language is first converted to an executable, then run?", options:["Compiled","Interpreted","Markup"], answer:0, why:"Compiled = compile to machine code first."},
-  {q:"Which kind of language is run one statement at a time by another program?", options:["Compiled","Interpreted","Markup"], answer:1, why:"An interpreter runs statements one at a time."},
-  {q:"C, C++, Java, and C# are what kind of language?", options:["Interpreted","Compiled","Markup"], answer:1, why:"These are the PDF's compiled examples."},
-  {q:"Python, JavaScript, and MATLAB are each what kind of language?", options:["Compiled","Interpreted","Statically typed"], answer:1, why:"These are the PDF's interpreted examples."},
-  {q:"Which kind of language usually runs faster?", options:["Compiled","Interpreted","They are equal"], answer:0, why:"Compiled languages run faster."},
-  {q:"Which kind of language is more portable to different machines?", options:["Compiled","Interpreted","Neither"], answer:1, why:"Interpreted runs on any machine with an interpreter."},
-  {q:"In a language where a variable's type must be declared and cannot change, the language is:", options:["Dynamically typed","Statically typed","Markup"], answer:1, why:"Static = unchanging type."},
-  {q:"Which languages are given as statically typed examples?", options:["C, C++, Java","Python","HTML"], answer:0, why:"C, C++, Java are the PDF's static examples."},
-  {q:"Which language is the PDF's example of a dynamically typed language?", options:["C++","Python","Java"], answer:1, why:"Python is the popular dynamic example."},
-  {q:"In a dynamically typed language, an integer x later assigned 3.14 becomes:", options:["An integer","A float","An error"], answer:1, why:"Dynamic type changes to match the value."},
-  {q:"In a statically typed language, assigning an integer variable with 'Hello there' usually:", options:["Reports an error","Changes the type to string","Runs fine"], answer:0, why:"Static reports type errors at compile time."},
-  {q:"An object consists of:", options:["Only variables","Internal data plus operations on that data","Only functions"], answer:1, why:"Object = data + operations."},
-  {q:"Which language is NOT considered object-oriented?", options:["C","C++","Java"], answer:0, why:"C does not support objects."},
-  {q:"Which languages provide extensive object-oriented support?", options:["C, MATLAB, HTML","C++, Java, Python, C#","HTML and XML"], answer:1, why:"These four have extensive OO support."},
-  {q:"How does a markup language differ from a programming language?", options:["It runs faster","It describes formatting and is not executed statement-by-statement","It must be compiled first"], answer:1, why:"Markup is rendered, not executed."},
-  {q:"HTML, the language of web pages, is what kind of language?", options:["Object-oriented","Statically-typed","Markup"], answer:2, why:"HTML is a markup language."},
-  {q:"A web browser executes an HTML program one statement at a time.", options:["True","False"], answer:1, why:"False — an HTML file is not a program; a browser renders it."},
-  {q:"A programming library is:", options:["A user's main program","A set of pre-written functions","A list of scalar variables"], answer:1, why:"A library is pre-written functions."},
-  {q:"The main reason to use a library is:", options:["To make the program compiled","Improved programmer productivity","To make types dynamic"], answer:1, why:"Libraries improve productivity via reuse."},
-  {q:"To use a library, a programmer must:", options:["Write the library's functions","Include the library then call its functions","Compile the library into HTML"], answer:1, why:"Include, then call — you don't write them."},
+  { ch:9,q:"Which kind of language is first converted to an executable, then run?", options:["Compiled","Interpreted","Markup"], answer:0, why:"Compiled = compile to machine code first."},
+  { ch:9,q:"Which kind of language is run one statement at a time by another program?", options:["Compiled","Interpreted","Markup"], answer:1, why:"An interpreter runs statements one at a time."},
+  { ch:9,q:"C, C++, Java, and C# are what kind of language?", options:["Interpreted","Compiled","Markup"], answer:1, why:"These are the PDF's compiled examples."},
+  { ch:9,q:"Python, JavaScript, and MATLAB are each what kind of language?", options:["Compiled","Interpreted","Statically typed"], answer:1, why:"These are the PDF's interpreted examples."},
+  { ch:9,q:"Which kind of language usually runs faster?", options:["Compiled","Interpreted","They are equal"], answer:0, why:"Compiled languages run faster."},
+  { ch:9,q:"Which kind of language is more portable to different machines?", options:["Compiled","Interpreted","Neither"], answer:1, why:"Interpreted runs on any machine with an interpreter."},
+  { ch:9,q:"In a language where a variable's type must be declared and cannot change, the language is:", options:["Dynamically typed","Statically typed","Markup"], answer:1, why:"Static = unchanging type."},
+  { ch:9,q:"Which languages are given as statically typed examples?", options:["C, C++, Java","Python","HTML"], answer:0, why:"C, C++, Java are the PDF's static examples."},
+  { ch:9,q:"Which language is the PDF's example of a dynamically typed language?", options:["C++","Python","Java"], answer:1, why:"Python is the popular dynamic example."},
+  { ch:9,q:"In a dynamically typed language, an integer x later assigned 3.14 becomes:", options:["An integer","A float","An error"], answer:1, why:"Dynamic type changes to match the value."},
+  { ch:9,q:"In a statically typed language, assigning an integer variable with 'Hello there' usually:", options:["Reports an error","Changes the type to string","Runs fine"], answer:0, why:"Static reports type errors at compile time."},
+  { ch:9,q:"An object consists of:", options:["Only variables","Internal data plus operations on that data","Only functions"], answer:1, why:"Object = data + operations."},
+  { ch:9,q:"Which language is NOT considered object-oriented?", options:["C","C++","Java"], answer:0, why:"C does not support objects."},
+  { ch:9,q:"Which languages provide extensive object-oriented support?", options:["C, MATLAB, HTML","C++, Java, Python, C#","HTML and XML"], answer:1, why:"These four have extensive OO support."},
+  { ch:9,q:"How does a markup language differ from a programming language?", options:["It runs faster","It describes formatting and is not executed statement-by-statement","It must be compiled first"], answer:1, why:"Markup is rendered, not executed."},
+  { ch:9,q:"HTML, the language of web pages, is what kind of language?", options:["Object-oriented","Statically-typed","Markup"], answer:2, why:"HTML is a markup language."},
+  { ch:9,q:"A web browser executes an HTML program one statement at a time.", options:["True","False"], answer:1, why:"False — an HTML file is not a program; a browser renders it."},
+  { ch:9,q:"A programming library is:", options:["A user's main program","A set of pre-written functions","A list of scalar variables"], answer:1, why:"A library is pre-written functions."},
+  { ch:9,q:"The main reason to use a library is:", options:["To make the program compiled","Improved programmer productivity","To make types dynamic"], answer:1, why:"Libraries improve productivity via reuse."},
+  { ch:9,q:"To use a library, a programmer must:", options:["Write the library's functions","Include the library then call its functions","Compile the library into HTML"], answer:1, why:"Include, then call — you don't write them."},
 ];
 
 // ============================================================
@@ -2226,6 +2670,456 @@ wage = Get next input
 salary = wage * 40 * 52
 Put "Salary is " to output
 Put salary to output`;
+
+// ============================================================
+//  PER-CHAPTER DATA (Chapters 1-9, from the PDFs)
+// ============================================================
+// Per-chapter data built strictly from the zyBooks PDFs (Ch 1-9).
+const CHAPTERS = [
+  { n: 1, title: "Introduction" },
+  { n: 2, title: "Variables & Expressions" },
+  { n: 3, title: "Branches" },
+  { n: 4, title: "Loops" },
+  { n: 5, title: "Arrays" },
+  { n: 6, title: "Functions" },
+  { n: 7, title: "Algorithms" },
+  { n: 8, title: "Software Design Processes" },
+  { n: 9, title: "Software Languages & Libraries" },
+];
+
+// What the Playground interpreter accepts at each chapter (cumulative).
+const SYNTAX_BY_CH = {
+  1: "integer variables, assignment, math (+ − * /), Put \"…\"/variable to output, \\n, Get next input, // comments.",
+  2: "everything in Ch 1, plus float, the modulo operator %, integer-vs-float division, and built-ins SquareRoot, RaiseToPower, AbsoluteValue, RandomNumber.",
+  3: "everything so far, plus if / elseif / else, the relational operators (== != < > <= >=), and the logical operators and / or / not.",
+  4: "everything so far, plus while, for, and do-while loops (including nested loops).",
+  5: "everything so far, plus arrays — integer array(N) name, element access name[i], and name.size.",
+  6: "everything so far, plus user-defined functions — Function Name(params) returns …, Main(), calls, and array(?) parameters.",
+  7: "the full language (functions, arrays, loops, branches) — this chapter is about algorithm design, so the search/sort examples run as normal programs.",
+  8: "this chapter is conceptual (software design, SDLC, UML) — there is no new Coral syntax. The playground still runs any earlier-chapter program.",
+  9: "this chapter is conceptual (kinds of languages and libraries) — the one Coral example is illustrative. Other languages shown in the book (C++, Python, HTML) are not Coral and do not run here.",
+};
+
+// Preloaded example programs, taken from each chapter's participation activities / labs / code samples.
+const EXAMPLES_BY_CH = {
+  1: [
+    { name: "Input → Process → Output", input: "2 5", code:
+`integer x
+integer y
+integer z
+x = Get next input
+y = Get next input
+z = x + y
+Put z to output` },
+    { name: "Salary from wage", input: "25", code:
+`integer wage
+integer salary
+wage = Get next input
+salary = wage * 40 * 52
+Put "Salary is " to output
+Put salary to output` },
+    { name: "Hello World! (LAB 1.12)", input: "", code:
+`Put "Hello World!" to output` },
+    { name: "No parking sign (LAB 1.13)", input: "", code:
+`Put "  NO PARKING\\n" to output
+Put "1:00 - 5:00 a.m." to output` },
+    { name: "Newlines", input: "", code:
+`Put "a\\nb\\nc" to output` },
+  ],
+  2: [
+    { name: "Measles (variable on both sides)", input: "", code:
+`x = 1
+x = x * 20
+x = x * 20
+Put "A person with measles may cause " to output
+Put x to output
+Put "\\n" to output
+Put "people to be infected in two weeks." to output` },
+    { name: "Six degrees of separation", input: "200", code:
+`yourFriends = Get next input
+totalFriends = yourFriends * yourFriends
+Put "Your friends know " to output
+Put totalFriends to output
+Put " people.\\n" to output
+totalFriends = totalFriends * yourFriends
+Put "And, they know " to output
+Put totalFriends to output
+Put " people.\\n" to output` },
+    { name: "Travel time (float division)", input: "400.5", code:
+`milesTraveled = Get next input
+hoursToFly = milesTraveled / 500.0
+hoursToDrive = milesTraveled / 60.0
+Put milesTraveled to output
+Put " miles would take\\n" to output
+Put hoursToFly to output
+Put " hours to fly or\\n" to output
+Put hoursToDrive to output
+Put " hours to drive." to output` },
+    { name: "Square root (math function)", input: "49.0", code:
+`areaSquare = Get next input
+sideSquare = SquareRoot(areaSquare)
+Put "Square root of " to output
+Put areaSquare to output
+Put " is " to output
+Put sideSquare to output` },
+    { name: "Integer division (Challenge 2.10.1)", input: "", code:
+`x = 60
+y = x / 5
+Put x to output
+Put " " to output
+Put y to output` },
+  ],
+  3: [
+    { name: "Hotel rate (if branch)", input: "68", code:
+`hotelRate = 155
+userAge = Get next input
+if userAge > 65
+   hotelRate = hotelRate - 20
+Put "Your rate: " to output
+Put hotelRate to output` },
+    { name: "Absolute value (if statement)", input: "-99", code:
+`integer val
+val = Get next input
+if val < 0
+   val = -val
+Put val to output` },
+    { name: "Insurance price (if-else)", input: "22", code:
+`integer userAge
+integer insurePrice
+userAge = Get next input
+if userAge < 25
+   insurePrice = 4800
+else
+   insurePrice = 2200
+Put "Annual price: $" to output
+Put insurePrice to output` },
+    { name: "Anniversaries (if-elseif)", input: "25", code:
+`numYears = Get next input
+if numYears == 1
+   Put "Newlyweds" to output
+elseif numYears == 25
+   Put "Silver" to output
+elseif numYears == 50
+   Put "Golden" to output
+else
+   Put "Congrats" to output` },
+    { name: "Cable channels (range with and)", input: "1300", code:
+`userChannel = Get next input
+if (userChannel >= 2) and (userChannel <= 499)
+   Put "Standard" to output
+elseif (userChannel >= 1002) and (userChannel <= 1499)
+   Put "High def" to output
+else
+   Put "Error" to output` },
+    { name: "Body temperature (float compare)", input: "99", code:
+`bodyTemp = Get next input
+if AbsoluteValue(bodyTemp - 98.6) < 0.0001
+   Put "Exactly normal" to output
+elseif (bodyTemp > 98.6)
+   Put "Above normal" to output
+else
+   Put "Below normal" to output` },
+  ],
+  4: [
+    { name: "Sum until sentinel (while)", input: "2 4 1 -1", code:
+`integer sum
+integer val
+sum = 0
+val = Get next input
+while val > -1
+   sum = sum + val
+   val = Get next input
+Put sum to output` },
+    { name: "Doubling powers (loop-until-done)", input: "1 1 0", code:
+`integer userNum
+integer curPower
+curPower = 2
+userNum = Get next input
+while userNum == 1
+   Put curPower to output
+   Put "\\n" to output
+   curPower = curPower * 2
+   userNum = Get next input
+Put "Done." to output` },
+    { name: "GCD — Euclid's algorithm (%)", input: "16 40", code:
+`integer numA
+integer numB
+integer temp
+integer rem
+numA = Get next input
+numB = Get next input
+if numA < numB
+   temp = numA
+   numA = numB
+   numB = temp
+while numA % numB > 0
+   rem = numA % numB
+   numA = numB
+   numB = rem
+Put "GCD is: " to output
+Put numB to output` },
+    { name: "For loop sum sequence", input: "", code:
+`integer sum
+integer i
+sum = 5
+for i = 0; i < 3; i = i + 1
+   Put sum to output
+   Put " " to output
+   sum = sum + 5
+Put "\\n" to output` },
+    { name: "Bar chart (nested loops)", input: "9 3 5 -1", code:
+`numAsterisk = Get next input
+while numAsterisk >= 0
+   Put numAsterisk to output
+   Put ": " to output
+   i = 0
+   while i < numAsterisk
+      Put "*" to output
+      i = i + 1
+   Put "\\n" to output
+   numAsterisk = Get next input` },
+  ],
+  5: [
+    { name: "Print three elements (Challenge 5.6.1)", input: "", code:
+`integer array(3) userVals
+integer i
+userVals[0] = 2
+userVals[1] = 5
+userVals[2] = 8
+Put userVals[0] to output
+Put userVals[1] to output
+Put userVals[2] to output` },
+    { name: "Sum of an array (Participation 5.6.3)", input: "10 30 -5 15 1", code:
+`integer array(5) userVals
+integer i
+integer sumVal
+for i = 0; i < userVals.size; i = i + 1
+   userVals[i] = Get next input
+sumVal = 0
+for i = 0; i < userVals.size; i = i + 1
+   sumVal = sumVal + userVals[i]
+Put "Sum: " to output
+Put sumVal to output` },
+    { name: "Nth oldest person", input: "4", code:
+`integer array(5) oldestPeople
+integer nthPerson
+integer personAge
+oldestPeople[0] = 122
+oldestPeople[1] = 119
+oldestPeople[2] = 117
+oldestPeople[3] = 117
+oldestPeople[4] = 116
+nthPerson = Get next input
+if ((nthPerson >= 1) and (nthPerson <= 5))
+   personAge = oldestPeople[nthPerson - 1]
+   Put nthPerson to output
+   Put "th oldest person died at age " to output
+   Put personAge to output` },
+    { name: "Print each on its own line", input: "", code:
+`integer array(3) userVals
+integer i
+userVals[0] = 1
+userVals[1] = 5
+userVals[2] = 9
+for i = 0; i < userVals.size; i = i + 1
+   Put userVals[i] to output
+   Put "\\n" to output` },
+    { name: "Swap two variables", input: "10 20", code:
+`x = Get next input
+y = Get next input
+tmpVal = x
+x = y
+y = tmpVal
+Put x to output
+Put " " to output
+Put y to output
+Put "\\n" to output` },
+  ],
+  6: [
+    { name: "Compute square (return value)", input: "", code:
+`Function ComputeSquare(integer numToSquare) returns integer numSquared
+   numSquared = numToSquare * numToSquare
+
+Function Main() returns nothing
+   integer squaredVal
+   squaredVal = ComputeSquare(7)
+   Put squaredVal to output` },
+    { name: "Print age (no return)", input: "", code:
+`Function PrintAge(integer userAge) returns nothing
+   Put "He is " to output
+   Put userAge to output
+
+Function Main() returns nothing
+   integer ageToPrint
+   ageToPrint = 24
+   PrintAge(ageToPrint)` },
+    { name: "Call inside an expression", input: "", code:
+`Function ChangeValue(integer x) returns integer y
+   y = x + 6
+
+Function Main() returns nothing
+   Put ChangeValue(4) to output` },
+    { name: "Kilometers → miles (float)", input: "100", code:
+`Function ConvKilometersToMiles(float numKilometers) returns float numMiles
+   float milesPerKm
+   milesPerKm = 0.621371
+   numMiles = numKilometers * milesPerKm
+
+Function Main() returns nothing
+   float distKm
+   float distMiles
+   distKm = Get next input
+   distMiles = ConvKilometersToMiles(distKm)
+   Put "Miles driven: " to output
+   Put distMiles to output` },
+    { name: "Max of an array (array param)", input: "", code:
+`Function FindScore(integer array(?) sVals) returns integer returnVal
+   integer i
+   returnVal = sVals[0]
+   for i = 1; i < sVals.size; i = i + 1
+      if sVals[i] > returnVal
+         returnVal = sVals[i]
+
+Function Main() returns nothing
+   integer array(3) quizScores
+   integer x
+   quizScores[0] = 5
+   quizScores[1] = 4
+   quizScores[2] = 6
+   x = FindScore(quizScores)
+   Put x to output
+   Put "\\n" to output` },
+  ],
+  7: [
+    { name: "Linear search driver", input: "10", code:
+`Function LinearSearch(integer array(?) numbers, integer key) returns integer keyIndex
+   integer i
+   keyIndex = -1
+   for i = 0; (i < numbers.size) and (keyIndex == -1); i = i + 1
+      if (numbers[i] == key)
+         keyIndex = i
+
+Function Main() returns nothing
+   integer array(8) numbers
+   integer i
+   integer key
+   integer keyIndex
+   numbers[0] = 2
+   numbers[1] = 4
+   numbers[2] = 7
+   numbers[3] = 10
+   numbers[4] = 11
+   numbers[5] = 32
+   numbers[6] = 45
+   numbers[7] = 87
+   Put "NUMBERS: " to output
+   for i = 0; i < numbers.size; i = i + 1
+      Put numbers[i] to output
+      Put " " to output
+   Put "\\n" to output
+   key = Get next input
+   keyIndex = LinearSearch(numbers, key)
+   if keyIndex == -1
+      Put key to output
+      Put " was not found" to output
+   else
+      Put "Found " to output
+      Put key to output
+      Put " at index " to output
+      Put keyIndex to output` },
+    { name: "Find max in an array", input: "", code:
+`Function FindMax(integer array(?) inputArray) returns integer max
+   integer i
+   max = inputArray[0]
+   for i = 0; i < inputArray.size; i = i + 1
+      if inputArray[i] > max
+         max = inputArray[i]
+
+Function Main() returns nothing
+   integer array(6) vals
+   integer m
+   vals[0] = 13
+   vals[1] = 7
+   vals[2] = 45
+   vals[3] = -3
+   vals[4] = 92
+   vals[5] = 17
+   m = FindMax(vals)
+   Put "Max: " to output
+   Put m to output` },
+  ],
+  8: [
+    { name: "SDLC as a checklist (a plain program)", input: "", code:
+`// Chapter 8 is conceptual (software design), so there is
+// no new Coral syntax. Here is a plain program that lists
+// the four SDLC phases, in order.
+Put "1. Analysis - define the goals\\n" to output
+Put "2. Design - decide how to build it\\n" to output
+Put "3. Implementation - write the code\\n" to output
+Put "4. Testing - check it meets the goals" to output` },
+  ],
+  9: [
+    { name: "Wage program (Coral, illustrative)", input: "20", code:
+`// The book uses this Coral program to contrast compiled
+// vs. interpreted languages. It still runs here.
+hourlyWage = Get next input
+Put "Salary is: " to output
+Put (hourlyWage * 40 * 50) to output` },
+  ],
+};
+
+// Graded labs / auto-graded challenge activities per chapter, with EXACT expected output.
+const GRADED_BY_CH = {
+  1: [
+    { id: "1.12", name: "Hello World!", out: "Hello World!", note: "One line, exact text.", coral: `Put "Hello World!" to output` },
+    { id: "1.13", name: "No parking sign", out: "  NO PARKING\n1:00 - 5:00 a.m.", note: "Note the TWO leading spaces on line 1.", coral: `Put "  NO PARKING\\n" to output\nPut "1:00 - 5:00 a.m." to output` },
+  ],
+  2: [
+    { id: "2.2.1", name: "Variable assignments", out: "9 6", note: "x=9, y=6 with a space between." },
+    { id: "2.5.1", name: "Integer expressions", out: "3 14", note: "y = 2 * (x + 4) with x = 3." },
+    { id: "2.8.1", name: "Math functions", out: "6.0", note: "SquareRoot(36.0) prints as a float." },
+    { id: "2.10.1", name: "Integer division", out: "60 12", note: "60 / 5 = 12 (integer division)." },
+  ],
+  3: [
+    { id: "3.1.1", name: "If-else branches", out: "eg", note: "The 'b' branch does not run (5 < 3 is false)." },
+    { id: "3.2.1", name: "Multiple if statements", out: "mz", note: "Independent ifs; only the true ones print." },
+    { id: "3.3.1", name: "Relational/equality", out: "c\nk", note: "4 <= 6 is true, so 'c' then 'k' each on a line." },
+    { id: "3.5.1", name: "Logical operators", out: "Oranges", note: "(5 > 6) and (5 < 12) is false → else runs." },
+    { id: "3.8.1", name: "Floating-point compare", out: "d", note: "12 == 9 is false, so only 'd' prints." },
+  ],
+  4: [
+    { id: "4.2.1", name: "Loop basics", out: "012", note: "g goes 0,1,2 while g <= 2." },
+    { id: "4.4.1", name: "Looping N times", out: "012", note: "i goes 0,1,2 while i < 3." },
+    { id: "4.5.1", name: "Loop iterating N times", out: "0\n1\n2\n3\n4", note: "Each i on its own line, i < 5." },
+    { id: "4.7.1", name: "Nested loops", out: "15 16 17 25 26 27 35 36 37 45 46 47 ", note: "Trailing space after each pair." },
+    { id: "4.8.2", name: "While loop with sentinel (max)", out: "Max value: 56", note: "For input 44 23 56 12 0." },
+  ],
+  5: [
+    { id: "5.8.1", name: "Output numbers in reverse", out: "20 18 16 14 12 10 8 6 4 2 ", note: "10 ints reversed; each followed by a space (including the last), then a newline. Input: 2 4 6 8 10 12 14 16 18 20." },
+    { id: "5.9.1", name: "Middle item", out: "4", note: "Sorted list ending in a negative; odd count; output the middle. Input: 2 3 4 8 11 -1." },
+    { id: "5.10.1", name: "Output values below an amount", out: "50 60 75 ", note: "5 ints, then a threshold; print those <= threshold, each followed by a space, then a newline. Input: 50 60 140 200 75 100." },
+  ],
+  6: [
+    { id: "6.8.1", name: "Miles to track laps", out: "6.0", note: "MilesToLaps(float userMiles) returns float; 1 lap = 0.25 mi. Input 1.5 → 6.0; input 2.2 → 8.8." },
+    { id: "6.9.1", name: "Max magnitude", out: "-8", note: "Returns the largest-MAGNITUDE value. Inputs 5 7 → 7; inputs -8 -2 → -8." },
+    { id: "6.10.1", name: "Driving cost", out: "1.58 7.90 63.20", note: "DrivingCost(...) with 2 decimal places, for 10/50/400 miles. Input 20.0 3.1599." },
+    { id: "6.11.1", name: "Step counter", out: "2.6725", note: "2000 steps = 1 mile; output with 4 decimal places. Input 5345." },
+    { id: "6.12.1", name: "Flip a coin", out: "heads heads tails", note: "Seed once with SeedRandomNumbers(2). 0=heads, 1=tails. Input 3." },
+    { id: "6.13.1", name: "A jiffy", out: "1500.0", note: "1 jiffy = 1/100 s. Input 15 → 1500.0." },
+    { id: "6.14.1", name: "Leap year", out: "1712 is a leap year.", note: "Div by 4; century years must be div by 400. Input 1712." },
+    { id: "6.15.1", name: "Max and min numbers", out: "largest: 15 smallest: 3", note: "Three integers. Input 7 15 3." },
+    { id: "6.16.1", name: "Convert to binary", out: "011", note: "Output bits in reverse via while x>0: x%2 then x=x/2. Input 6 → 011." },
+  ],
+  7: [
+    { id: "7 (participation)", name: "Algorithms — participation activities only", out: "(no graded lab)", note: "Chapter 7 is auto-graded participation/challenge activities (correctness, complexity, linear/binary search); no submit-and-grade lab. Practice the search programs in the Playground." },
+  ],
+  8: [
+    { id: "8 (participation)", name: "Software design — participation activities only", out: "(no graded lab)", note: "Chapter 8 is conceptual (SDLC + UML) with participation activities; no coding lab. Focus on the Quiz and the SDLC/UML lab." },
+  ],
+  9: [
+    { id: "9 (participation)", name: "Languages & libraries — participation activities only", out: "(no graded lab)", note: "Chapter 9 is conceptual with participation activities; no coding lab. Focus on the Quiz and the Classifier lab." },
+  ],
+};
 
 const EXAMPLES = [
   { name: "Salary", input: "25", code: DEFAULT_CODE },
@@ -2327,15 +3221,17 @@ function SectionHead({ children }) {
   );
 }
 
-function Learn({ navSec, onNavDone }) {
-  const [open, setOpen] = useState("What a program is");
-  // group lessons by section
+function Learn({ navSec, onNavDone, ch }) {
+  ch = ch || 1;
+  const [open, setOpen] = useState("");
+  // group lessons by section, filtered to the active chapter
   const groups = [];
-  LESSONS.forEach((l) => {
+  LESSONS.filter((l) => parseInt(l.sec, 10) === ch).forEach((l) => {
     let g = groups.find((x) => x.sec === l.sec);
     if (!g) { g = { sec: l.sec, items: [] }; groups.push(g); }
     g.items.push(l);
   });
+  useEffect(() => { setOpen(groups[0] && groups[0].items[0] ? groups[0].items[0].title : ""); }, [ch]);
   useEffect(() => {
     if (!navSec) return;
     const grp = groups.find((g) => g.sec.split(" ")[0] === navSec);
@@ -2351,9 +3247,9 @@ function Learn({ navSec, onNavDone }) {
   return (
     <div className="space-y-6">
       <p className="text-slate-600 text-sm bg-teal-50 border border-teal-200 rounded-xl p-3">
-        Every section of Chapters 1–9 is here as short cards. Tap a card to expand.
-        Labs and graded-lab practice are in the other tabs.
+        Every section of Chapter {ch} as short cards — tap to expand. Hands-on practice is in the Lab and Playground tabs.
       </p>
+      {groups.length === 0 && <p className="text-slate-500 text-sm">No lesson cards for this chapter.</p>}
       {groups.map((g) => (
         <div key={g.sec} id={"sec-" + g.sec.split(" ")[0]} style={{ scrollMarginTop: "70px" }}>
           <div className="font-mono text-xs tracking-widest uppercase text-slate-400 mb-2 mt-2">{g.sec}</div>
@@ -2699,55 +3595,370 @@ function FlowStepLab() {
   );
 }
 
-// ---------- Labs tab (holds all hands-on widgets) ----------
-const LAB_TABS = [
-  { id: "bits", label: "Binary & ASCII", C: BitLab },
-  { id: "turtle", label: "Turtle Graphics", C: TurtleLab },
-  { id: "reorder", label: "Reorder & Run", C: ReorderLab },
-  { id: "flow", label: "Flowchart Stepper", C: FlowStepLab },
-];
-function Labs() {
-  const [sub, setSub] = useState("bits");
-  const Active = LAB_TABS.find((t) => t.id === sub).C;
+// ================= NEW per-chapter lab widgets =================
+
+// ---- Ch2: Integer division & modulo explorer ----
+function IntDivLab() {
+  const [a, setA] = useState(23);
+  const [b, setB] = useState(10);
+  const intDiv = b === 0 ? "error (÷0 crashes)" : Math.trunc(a / b);
+  const floatDiv = b === 0 ? "Infinity" : (a / b);
+  const mod = b === 0 ? "error" : (a % b);
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        {LAB_TABS.map((t) => (
-          <button key={t.id} onClick={() => setSub(t.id)}
-            className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition-colors ${
-              sub === t.id ? "bg-teal-600 border-teal-700 text-white" : "bg-white border-slate-300 text-slate-600 hover:border-teal-500"}`}>
-            {t.label}
-          </button>
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Integer division & modulo</SectionHead>
+      <p className="text-slate-600 text-sm mb-4">The trap of Chapter 2: two integers divide with the fraction <b>dropped</b>. Add a <span className="font-mono">.0</span> and it becomes true division. <span className="font-mono">%</span> gives the remainder.</p>
+      <div className="flex items-end gap-3 mb-4">
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">a</label>
+          <input type="number" value={a} onChange={(e) => setA(parseInt(e.target.value || "0", 10))} className="w-24 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">b</label>
+          <input type="number" value={b} onChange={(e) => setB(parseInt(e.target.value || "0", 10))} className="w-24 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+      </div>
+      <div className="grid sm:grid-cols-3 gap-3 font-mono text-sm">
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">a / b (integer)</div><div className="text-slate-900 text-lg">{a} / {b} = {String(intDiv)}</div></div>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">a / b.0 (float)</div><div className="text-slate-900 text-lg">{a} / {b}.0 = {String(floatDiv)}</div></div>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">a % b (modulo)</div><div className="text-slate-900 text-lg">{a} % {b} = {String(mod)}</div></div>
+      </div>
+      <p className="text-xs text-slate-500 mt-3">↳ Integer ÷ 0 crashes the program; float ÷ 0 gives Infinity / NotANumber.</p>
+    </section>
+  );
+}
+
+// ---- Ch3: Branch tracer ----
+const BRANCH_PROGRAMS = {
+  insurance: { label: "Insurance price", varName: "userAge", start: 22,
+    branches: [
+      { test: (x) => x < 25, cond: "userAge < 25", out: "Annual price: $4800" },
+      { test: (x) => x < 40, cond: "userAge < 40", out: "Annual price: $2350" },
+      { test: () => true, cond: "else", out: "Annual price: $2100" },
+    ] },
+  anniv: { label: "Anniversaries", varName: "numYears", start: 25,
+    branches: [
+      { test: (x) => x === 1, cond: "numYears == 1", out: "Newlyweds" },
+      { test: (x) => x === 25, cond: "numYears == 25", out: "Silver" },
+      { test: (x) => x === 50, cond: "numYears == 50", out: "Golden" },
+      { test: () => true, cond: "else", out: "Congrats" },
+    ] },
+  cable: { label: "Cable channels", varName: "userChannel", start: 1300,
+    branches: [
+      { test: (x) => x >= 2 && x <= 499, cond: "(ch >= 2) and (ch <= 499)", out: "Standard" },
+      { test: (x) => x >= 1002 && x <= 1499, cond: "(ch >= 1002) and (ch <= 1499)", out: "High def" },
+      { test: () => true, cond: "else", out: "Error" },
+    ] },
+};
+function BranchLab() {
+  const [prog, setProg] = useState("insurance");
+  const p = BRANCH_PROGRAMS[prog];
+  const [val, setVal] = useState(p.start);
+  useEffect(() => { setVal(BRANCH_PROGRAMS[prog].start); }, [prog]);
+  let taken = -1;
+  for (let i = 0; i < p.branches.length; i++) { if (p.branches[i].test(val)) { taken = i; break; } }
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Branch tracer</SectionHead>
+      <p className="text-slate-600 text-sm mb-4">In an if-elseif chain, exactly <b>one</b> branch runs — the first true one. Change the input and watch which branch fires.</p>
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">Program</label>
+          <select value={prog} onChange={(e) => setProg(e.target.value)} className="block font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none">
+            {Object.entries(BRANCH_PROGRAMS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select></div>
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">{p.varName}</label>
+          <input type="number" value={val} onChange={(e) => setVal(parseInt(e.target.value || "0", 10))} className="w-28 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+      </div>
+      <div className="space-y-2">
+        {p.branches.map((b, i) => {
+          const isTaken = i === taken;
+          const skipped = taken >= 0 && i < taken;
+          return (
+            <div key={i} className={`rounded-xl px-4 py-2.5 font-mono text-sm border-2 ${isTaken ? "border-teal-600 bg-teal-50 text-teal-900" : skipped ? "border-slate-200 bg-slate-50 text-slate-400 line-through" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              <span className="font-semibold">{i === 0 ? "if " : b.cond === "else" ? "" : "elseif "}</span>{b.cond}
+              {isTaken && <span className="ml-2 not-italic no-underline">→ prints “{b.out}” ✓</span>}
+              {skipped && <span className="ml-2">(false)</span>}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-slate-500 mt-3">↳ Output: <span className="font-mono text-slate-700">{taken >= 0 ? p.branches[taken].out : ""}</span></p>
+    </section>
+  );
+}
+
+// ---- Ch4: Loop trace stepper ----
+function LoopLab() {
+  const [n, setN] = useState(4);
+  const [step, setStep] = useState(0);
+  // for i = 0; i < n; i = i + 1 : sum += i  (show each iteration)
+  const rows = [];
+  let sum = 0;
+  for (let i = 0; i < n; i++) { sum += i; rows.push({ i, cond: `${i} < ${n} → true`, sum }); }
+  rows.push({ i: n, cond: `${n} < ${n} → false, stop`, sum, done: true });
+  const shown = Math.min(step, rows.length);
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Loop trace stepper</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">Step a <span className="font-mono">for i = 0; i &lt; N; i = i + 1</span> loop that adds each i to a running <span className="font-mono">sum</span>. Watch the three loop parts: init, test, update.</p>
+      <div className="flex items-end gap-3 mb-4">
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">N</label>
+          <input type="number" value={n} min="1" max="12" onChange={(e) => { setN(Math.max(1, Math.min(12, parseInt(e.target.value || "1", 10)))); setStep(0); }} className="w-20 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+        <button onClick={() => setStep(Math.min(rows.length, step + 1))} disabled={shown >= rows.length} className="bg-teal-700 hover:bg-teal-800 disabled:opacity-40 text-white font-semibold px-4 py-2 rounded-lg">Step →</button>
+        <button onClick={() => setStep(rows.length)} className="bg-slate-700 hover:bg-slate-800 text-white font-semibold px-4 py-2 rounded-lg">Run all</button>
+        <button onClick={() => setStep(0)} className="bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-2 rounded-lg">Reset</button>
+      </div>
+      <table className="w-full text-sm font-mono border border-slate-200 rounded-lg overflow-hidden">
+        <thead><tr className="bg-slate-100 text-slate-500 text-xs uppercase"><th className="px-3 py-2 text-left">i</th><th className="px-3 py-2 text-left">test i &lt; N</th><th className="px-3 py-2 text-left">sum</th></tr></thead>
+        <tbody>
+          {rows.slice(0, shown).map((r, k) => (
+            <tr key={k} className={`border-t border-slate-100 ${r.done ? "text-rose-700" : "text-slate-800"}`}>
+              <td className="px-3 py-1.5">{r.done ? "—" : r.i}</td><td className="px-3 py-1.5">{r.cond}</td><td className="px-3 py-1.5">{r.sum}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {shown >= rows.length && <p className="text-xs text-slate-500 mt-3">↳ Final sum of 0..{n - 1} is <span className="font-mono text-teal-700">{sum}</span>. The loop ran {n} times.</p>}
+    </section>
+  );
+}
+
+// ---- Ch5: Array visualizer ----
+function ArrayLab() {
+  const [vals, setVals] = useState([10, 30, -5, 15, 1]);
+  const [mode, setMode] = useState("sum");
+  const [i, setI] = useState(-1);
+  const [raw, setRaw] = useState("10 30 -5 15 1");
+  const apply = () => { const v = raw.trim().split(/\s+/).map(Number).filter((x) => !Number.isNaN(x)); setVals(v.length ? v : [0]); setI(-1); };
+  // compute running accumulator up to index i
+  let acc = mode === "max" ? (vals[0] ?? 0) : 0;
+  let label = mode === "sum" ? "sum" : mode === "max" ? "maxVal" : "numNeg";
+  const upto = i < 0 ? -1 : i;
+  if (mode === "max") { acc = vals[0] ?? 0; for (let k = 1; k <= upto; k++) if (vals[k] > acc) acc = vals[k]; }
+  else if (mode === "sum") { acc = 0; for (let k = 0; k <= upto; k++) acc += vals[k]; }
+  else { acc = 0; for (let k = 0; k <= upto; k++) if (vals[k] < 0) acc++; }
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Array loop visualizer</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">Index above, value inside. Step the standard loop <span className="font-mono">for i = 0; i &lt; arr.size; i = i + 1</span> and watch the accumulator build.</p>
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div className="flex-1 min-w-40"><label className="text-xs text-slate-500 uppercase tracking-wide">Values (space-separated)</label>
+          <input value={raw} onChange={(e) => setRaw(e.target.value)} className="w-full font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+        <button onClick={apply} className="bg-slate-700 hover:bg-slate-800 text-white font-semibold px-4 py-2 rounded-lg">Set</button>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {[["sum", "Sum"], ["max", "Find max"], ["neg", "Count negatives"]].map(([k, l]) => (
+          <button key={k} onClick={() => { setMode(k); setI(-1); }} className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 ${mode === k ? "bg-teal-600 border-teal-700 text-white" : "bg-white border-slate-300 text-slate-600"}`}>{l}</button>
         ))}
       </div>
+      <div className="flex gap-1.5 overflow-x-auto pb-2 mb-3">
+        {vals.map((v, k) => (
+          <div key={k} className="text-center">
+            <div className="text-[10px] font-mono text-slate-400">[{k}]</div>
+            <div className={`w-12 h-12 flex items-center justify-center rounded-lg font-mono font-bold border-2 ${k === i ? "border-teal-600 bg-teal-50 text-teal-800" : k < i ? "border-slate-200 bg-slate-100 text-slate-400" : "border-slate-300 bg-white text-slate-800"}`}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3">
+        <button onClick={() => setI(Math.min(vals.length - 1, i + 1))} disabled={i >= vals.length - 1} className="bg-teal-700 hover:bg-teal-800 disabled:opacity-40 text-white font-semibold px-4 py-2 rounded-lg">Step →</button>
+        <button onClick={() => setI(-1)} className="bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-2 rounded-lg">Reset</button>
+        <span className="font-mono text-sm bg-teal-50 text-teal-800 border border-teal-200 rounded-full px-3 py-1">{label} = {i < 0 && mode !== "max" ? 0 : acc}</span>
+        {i >= 0 && <span className="font-mono text-xs text-slate-500">at index {i}, value {vals[i]}</span>}
+      </div>
+      <p className="text-xs text-slate-500 mt-3">↳ For Find max, seed <span className="font-mono">maxVal = arr[0]</span> (not 0) so all-negative lists still work.</p>
+    </section>
+  );
+}
+
+// ---- Ch6: Function call tracer ----
+const FUNCS = {
+  square: { sig: "Function ComputeSquare(integer numToSquare) returns integer numSquared", param: "numToSquare", body: (x) => x * x, bodyText: "numSquared = numToSquare * numToSquare", ret: "numSquared" },
+  change: { sig: "Function ChangeValue(integer x) returns integer y", param: "x", body: (x) => x + 6, bodyText: "y = x + 6", ret: "y" },
+  incby2: { sig: "Function IncByTwo(integer x) returns integer y", param: "x", body: (x) => x + 2, bodyText: "y = x + 2", ret: "y" },
+};
+function FuncLab() {
+  const [fn, setFn] = useState("square");
+  const [arg, setArg] = useState(7);
+  const f = FUNCS[fn];
+  const retVal = f.body(arg);
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Function call tracer</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">A call binds your <b>argument</b> to the <b>parameter</b> by position, runs the body, and the value assigned to the return variable flows back to the caller.</p>
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">Function</label>
+          <select value={fn} onChange={(e) => setFn(e.target.value)} className="block font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none">
+            <option value="square">ComputeSquare</option><option value="change">ChangeValue</option><option value="incby2">IncByTwo</option>
+          </select></div>
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">argument</label>
+          <input type="number" value={arg} onChange={(e) => setArg(parseInt(e.target.value || "0", 10))} className="w-24 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+      </div>
+      <pre className="bg-slate-900 text-teal-50 rounded-xl p-4 font-mono text-xs whitespace-pre-wrap mb-3">{f.sig + "\n   " + f.bodyText}</pre>
+      <div className="grid sm:grid-cols-3 gap-3 font-mono text-sm">
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">parameter</div><div className="text-slate-900">{f.param} = {arg}</div></div>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">body runs</div><div className="text-slate-900">{f.bodyText.replace(f.param, String(arg))}</div></div>
+        <div className="bg-teal-50 border border-teal-200 rounded-xl p-3"><div className="text-teal-600 text-xs">returns {f.ret}</div><div className="text-teal-900 text-lg">{retVal}</div></div>
+      </div>
+      <p className="text-xs text-slate-500 mt-3">↳ Because the call evaluates to {retVal}, you can use it inside an expression, e.g. <span className="font-mono">Put {fn === "square" ? "ComputeSquare" : fn === "change" ? "ChangeValue" : "IncByTwo"}({arg}) to output</span>.</p>
+    </section>
+  );
+}
+
+// ---- Ch7: Search race visualizer ----
+function SearchLab() {
+  const arr = [2, 4, 7, 10, 11, 32, 45, 87];
+  const [key, setKey] = useState(10);
+  // linear
+  let lin = { comps: 0, idx: -1 };
+  for (let i = 0; i < arr.length; i++) { lin.comps++; if (arr[i] === key) { lin.idx = i; break; } }
+  // binary
+  let low = 0, high = arr.length - 1, bin = { comps: 0, idx: -1 }, path = [];
+  while (low <= high) { const mid = Math.floor((low + high) / 2); bin.comps++; path.push(mid); if (arr[mid] === key) { bin.idx = mid; break; } else if (arr[mid] < key) low = mid + 1; else high = mid - 1; }
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Linear vs binary search</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">On a <b>sorted</b> array, binary search halves the space each step. Enter a key and compare the comparison counts.</p>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {arr.map((v, k) => (
+          <div key={k} className="text-center">
+            <div className="text-[10px] font-mono text-slate-400">[{k}]</div>
+            <div className={`w-11 h-11 flex items-center justify-center rounded-lg font-mono font-bold border-2 ${v === key ? "border-teal-600 bg-teal-50 text-teal-800" : path.includes(k) ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-300 bg-white text-slate-800"}`}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-end gap-3 mb-4">
+        <div><label className="text-xs text-slate-500 uppercase tracking-wide">search key</label>
+          <input type="number" value={key} onChange={(e) => setKey(parseInt(e.target.value || "0", 10))} className="w-24 font-mono border-2 border-slate-300 rounded-lg px-3 py-2 focus:border-teal-600 focus:outline-none" /></div>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3 font-mono text-sm">
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-slate-500 text-xs">Linear search</div><div className="text-slate-900">{lin.comps} comparison{lin.comps === 1 ? "" : "s"} → {lin.idx === -1 ? "not found" : "index " + lin.idx}</div></div>
+        <div className="bg-teal-50 border border-teal-200 rounded-xl p-3"><div className="text-teal-600 text-xs">Binary search (amber = middles checked)</div><div className="text-teal-900">{bin.comps} comparison{bin.comps === 1 ? "" : "s"} → {bin.idx === -1 ? "not found" : "index " + bin.idx}</div></div>
+      </div>
+      <p className="text-xs text-slate-500 mt-3">↳ Worst case: linear ≈ N comparisons, binary ≈ ⌊log₂N⌋+1. Binary needs the list sorted.</p>
+    </section>
+  );
+}
+
+// ---- Ch8: SDLC / UML matcher ----
+const SDLC = [["Analysis", "define the program's goals", "Use case diagram"], ["Design", "decide how to build it", "Class diagram"], ["Implementation", "write the code", "Activity diagram"], ["Testing", "check it meets the goals", "Sequence diagram"]];
+function DesignLab() {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>SDLC phases & UML diagrams</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">The four SDLC phases run in order, and each pairs with one UML diagram. Study the order, then reveal the matches.</p>
+      <div className="space-y-2 mb-4">
+        {SDLC.map((r, i) => (
+          <div key={i} className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+            <div className="w-7 h-7 flex items-center justify-center rounded-full bg-slate-900 text-white font-mono text-sm">{i + 1}</div>
+            <div className="flex-1">
+              <div className="font-semibold text-slate-900 text-sm">{r[0]}</div>
+              <div className="text-xs text-slate-500">{r[1]}</div>
+            </div>
+            <div className={`font-mono text-xs rounded-full px-3 py-1 border ${reveal ? "bg-teal-50 border-teal-200 text-teal-800" : "bg-slate-200 border-slate-300 text-slate-400"}`}>{reveal ? r[2] : "UML: ？"}</div>
+          </div>
+        ))}
+      </div>
+      <button onClick={() => setReveal(!reveal)} className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-5 py-2 rounded-lg">{reveal ? "Hide UML matches" : "Reveal UML matches"}</button>
+      <p className="text-xs text-slate-500 mt-3">↳ Waterfall does these once, top to bottom; agile repeats them in small cycles. Class diagram is the only <b>structural</b> one; the other three are <b>behavioral</b>.</p>
+    </section>
+  );
+}
+
+// ---- Ch9: Language classifier ----
+const LANGS = [
+  { name: "C", tags: ["Compiled", "Static", "not OO"] },
+  { name: "C++", tags: ["Compiled", "Static", "OO"] },
+  { name: "Java", tags: ["Compiled", "Static", "OO"] },
+  { name: "Python", tags: ["Interpreted", "Dynamic", "OO"] },
+  { name: "JavaScript", tags: ["Interpreted", "Dynamic"] },
+  { name: "MATLAB", tags: ["Interpreted"] },
+  { name: "HTML", tags: ["Markup"] },
+];
+function LangLab() {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <SectionHead>Language classifier</SectionHead>
+      <p className="text-slate-600 text-sm mb-3">Sort the book's example languages. Try to recall each one's category, then reveal.</p>
+      <div className="grid sm:grid-cols-2 gap-2 mb-4">
+        {LANGS.map((l) => (
+          <div key={l.name} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
+            <div className="font-mono font-semibold text-slate-900 w-24">{l.name}</div>
+            <div className="flex flex-wrap gap-1">
+              {reveal ? l.tags.map((t) => <span key={t} className="font-mono text-[11px] bg-teal-50 text-teal-800 border border-teal-200 rounded-full px-2 py-0.5">{t}</span>)
+                : <span className="font-mono text-[11px] text-slate-400">tap reveal →</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={() => setReveal(!reveal)} className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-5 py-2 rounded-lg">{reveal ? "Hide" : "Reveal categories"}</button>
+      <p className="text-xs text-slate-500 mt-3">↳ Compiled = machine code first, faster. Interpreted = run by an interpreter, portable. Static = type fixed; Dynamic = type can change. C is the one that is <b>not</b> object-oriented; HTML is markup (not a program).</p>
+    </section>
+  );
+}
+
+// ---------- Labs tab: chapter-aware ----------
+const LABS_BY_CH = {
+  1: [{ id: "bits", label: "Binary & ASCII", C: BitLab }, { id: "turtle", label: "Turtle Graphics", C: TurtleLab }, { id: "reorder", label: "Reorder & Run", C: ReorderLab }, { id: "flow", label: "Flowchart Stepper", C: FlowStepLab }],
+  2: [{ id: "intdiv", label: "Division & Modulo", C: IntDivLab }],
+  3: [{ id: "branch", label: "Branch Tracer", C: BranchLab }],
+  4: [{ id: "loop", label: "Loop Stepper", C: LoopLab }],
+  5: [{ id: "array", label: "Array Visualizer", C: ArrayLab }],
+  6: [{ id: "func", label: "Function Tracer", C: FuncLab }],
+  7: [{ id: "search", label: "Search Race", C: SearchLab }],
+  8: [{ id: "design", label: "SDLC & UML", C: DesignLab }],
+  9: [{ id: "lang", label: "Language Classifier", C: LangLab }],
+};
+function Labs({ ch }) {
+  ch = ch || 1;
+  const tabs = LABS_BY_CH[ch] || [];
+  const [sub, setSub] = useState(tabs[0] ? tabs[0].id : "");
+  useEffect(() => { const t = LABS_BY_CH[ch] || []; setSub(t[0] ? t[0].id : ""); }, [ch]);
+  const found = tabs.find((t) => t.id === sub) || tabs[0];
+  if (!found) return <p className="text-slate-500 text-sm">No lab for this chapter.</p>;
+  const Active = found.C;
+  return (
+    <div className="space-y-4">
+      {tabs.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setSub(t.id)}
+              className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition-colors ${sub === t.id ? "bg-teal-600 border-teal-700 text-white" : "bg-white border-slate-300 text-slate-600 hover:border-teal-500"}`}>{t.label}</button>
+          ))}
+        </div>
+      )}
       <Active />
     </div>
   );
 }
 
-// ---------- Playground ----------
-function Playground() {
-  const [code, setCode] = useState(DEFAULT_CODE);
-  const [input, setInput] = useState("25");
+// ================= NEW: chapter-aware Playground =================
+function Playground({ ch }) {
+  ch = ch || 1;
+  const exs = EXAMPLES_BY_CH[ch] || [];
+  const [code, setCode] = useState(exs[0] ? exs[0].code : "");
+  const [input, setInput] = useState(exs[0] ? exs[0].input : "");
   const [result, setResult] = useState(null);
-  const run = () => setResult(runCoral(code, input));
-  const load = (ex) => { setCode(ex.code.replace(/\\n/g, "\\n")); setInput(ex.input); setResult(null); };
+  useEffect(() => {
+    const e = (EXAMPLES_BY_CH[ch] || [])[0];
+    setCode(e ? e.code : ""); setInput(e ? e.input : ""); setResult(null);
+  }, [ch]);
+  const run = () => setResult(runCoral(code, input, ch));
+  const load = (ex) => { setCode(ex.code); setInput(ex.input); setResult(null); };
+  const graded = GRADED_BY_CH[ch] || [];
 
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
-        <SectionHead>Coral playground</SectionHead>
+        <SectionHead>Chapter {ch} playground</SectionHead>
         <p className="text-slate-600 text-sm mb-3">
-          Write Coral, press Run. Supports integer declarations, assignments, math (+ − * /),
-          the modulo operator %, integer division (7 / 2 = 3), Get next input, Put ... to output, and // comments.
+          These programs are pulled straight from Chapter {ch}. The interpreter runs {SYNTAX_BY_CH[ch]}
+          {" "}Try later-chapter syntax and it will tell you which chapter introduces it.
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
-          {EXAMPLES.map((ex) => (
+          {exs.map((ex) => (
             <button key={ex.name} onClick={() => load(ex)}
               className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg">{ex.name}</button>
           ))}
         </div>
-        <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false} rows={9}
+        <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false} rows={Math.min(16, Math.max(8, code.split("\n").length + 1))}
           className="w-full font-mono text-sm bg-slate-900 text-teal-50 rounded-xl p-4 focus:outline-none focus:ring-2 focus:ring-teal-500 resize-y" />
         <div className="flex flex-wrap items-end gap-3 mt-3">
           <div className="flex-1 min-w-40">
@@ -2765,7 +3976,7 @@ function Playground() {
           <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Output</div>
           <pre className="bg-slate-100 rounded-xl p-4 font-mono text-sm whitespace-pre-wrap min-h-12 text-slate-900">{result.output || " "}</pre>
           {!result.ok && (
-            <p className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{result.error}</p>
+            <p className={`mt-2 text-sm rounded-lg px-3 py-2 ${result.gated ? "text-amber-800 bg-amber-50 border border-amber-200" : "text-rose-700 bg-rose-50 border border-rose-200"}`}>{result.gated ? "🔒 " : ""}{result.error}</p>
           )}
           {result.ok && result.vars && Object.keys(result.vars).length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -2776,29 +3987,59 @@ function Playground() {
           )}
         </div>
       )}
+
+      {graded.length > 0 && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+          <SectionHead>Graded labs — exact expected output</SectionHead>
+          <p className="text-slate-600 text-sm mb-3">
+            zyBooks checks output character-for-character, including spaces and newlines. Match these exactly.
+          </p>
+          <div className="space-y-3">
+            {graded.map((g) => (
+              <div key={g.id} className="border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-semibold text-slate-900">{g.id} — {g.name}</div>
+                  {g.coral && (
+                    <button onClick={() => load({ code: g.coral, input: "" })}
+                      className="text-xs font-semibold text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-1 hover:bg-teal-100">Load in editor →</button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-1 mb-2">{g.note}</p>
+                <div className="text-[10px] font-mono uppercase tracking-wide text-slate-400 mb-1">expected output</div>
+                <pre className="bg-slate-900 text-teal-50 rounded-lg p-3 font-mono text-sm whitespace-pre-wrap">{g.out}</pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+
 // ---------- Quiz ----------
-function Quiz() {
+function Quiz({ ch }) {
+  ch = ch || 1;
+  const QZ = QUIZ.filter((q) => q.ch === ch);
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [score, setScore] = useState(0);
   const [done, setDone] = useState(false);
-  const q = QUIZ[idx];
+  useEffect(() => { setIdx(0); setPicked(null); setScore(0); setDone(false); }, [ch]);
+  if (QZ.length === 0) return <p className="text-slate-500 text-sm">No quiz for this chapter.</p>;
+  const q = QZ[idx];
   const correct = picked === q.answer;
   const next = () => {
-    if (idx + 1 >= QUIZ.length) setDone(true);
+    if (idx + 1 >= QZ.length) setDone(true);
     else { setIdx(idx + 1); setPicked(null); }
   };
   const restart = () => { setIdx(0); setPicked(null); setScore(0); setDone(false); };
 
   if (done) {
-    const pct = Math.round((score / QUIZ.length) * 100);
+    const pct = Math.round((score / QZ.length) * 100);
     return (
       <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 text-center">
-        <div className="font-mono text-6xl font-bold text-slate-900 mb-2">{score}/{QUIZ.length}</div>
+        <div className="font-mono text-6xl font-bold text-slate-900 mb-2">{score}/{QZ.length}</div>
         <p className="text-slate-600 mb-1">
           {pct >= 85 ? "Excellent — you've got this chapter down."
             : pct >= 60 ? "Solid. Review the ones you missed and run it again."
@@ -2811,11 +4052,11 @@ function Quiz() {
   return (
     <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
       <div className="flex justify-between items-center mb-4">
-        <span className="font-mono text-xs text-slate-500">Question {idx + 1} of {QUIZ.length}</span>
+        <span className="font-mono text-xs text-slate-500">Question {idx + 1} of {QZ.length}</span>
         <span className="font-mono text-xs text-teal-700 font-semibold">score: {score}</span>
       </div>
       <div className="h-1.5 bg-slate-100 rounded-full mb-5">
-        <div className="h-1.5 bg-teal-600 rounded-full transition-all" style={{ width: `${(idx / QUIZ.length) * 100}%` }} />
+        <div className="h-1.5 bg-teal-600 rounded-full transition-all" style={{ width: `${(idx / QZ.length) * 100}%` }} />
       </div>
       <p className="text-slate-900 font-medium mb-4 whitespace-pre-wrap">{q.q}</p>
       <div className="space-y-2">
@@ -2840,7 +4081,7 @@ function Quiz() {
       )}
       {picked !== null && (
         <button onClick={next} className="mt-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold px-6 py-2.5 rounded-lg">
-          {idx + 1 >= QUIZ.length ? "See results" : "Next →"}
+          {idx + 1 >= QZ.length ? "See results" : "Next →"}
         </button>
       )}
     </div>
@@ -3066,8 +4307,8 @@ function ExamPrep() {
             ["library","set of pre-written functions for common tasks; include then call"],
             ["why libraries","improve programmer productivity by reusing pre-written functions"],
             ["categories overlap","kinds are not exclusive; e.g. object-oriented can be static OR dynamic"],
-          ].map(([t, d]) => (
-            <div key={t} className="flex gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          ].map(([t, d], i) => (
+            <div key={t + "-" + i} className="flex gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
               <span className="font-mono text-teal-700 font-semibold whitespace-nowrap">{t}</span>
               <span className="text-slate-600">{d}</span>
             </div>
@@ -3158,26 +4399,37 @@ const TABS = [
 function App() {
   const [tab, setTab] = useState("learn");
   const [navSec, setNavSec] = useState(null);
+  const [activeCh, setActiveCh] = useState(1);
   useEffect(() => {
-    const h = (e) => { setTab("learn"); setNavSec(e.detail); };
+    const h = (e) => {
+      const sec = e.detail;
+      const cn = parseInt(sec, 10);
+      if (cn >= 1 && cn <= 9) setActiveCh(cn);
+      setTab("learn"); setNavSec(sec);
+    };
     window.addEventListener("d278nav", h);
     return () => window.removeEventListener("d278nav", h);
   }, []);
   const Active = TABS.find((t) => t.id === tab).C;
+  const chObj = CHAPTERS.find((c) => c.n === activeCh) || CHAPTERS[0];
+  const chapterScoped = ["learn", "labs", "code", "quiz"].includes(tab);
   return (
     <div className="min-h-screen bg-slate-100" style={{ fontFamily: "ui-sans-serif, system-ui, sans-serif" }}>
       <header className="bg-slate-900 text-white">
-        <div className="max-w-3xl mx-auto px-5 py-8">
+        <div className="max-w-3xl mx-auto px-5 py-7">
           <div className="font-mono text-xs tracking-widest text-teal-400 uppercase mb-2">
             WGU D278 · Programming Foundations · Chapters 1–9
           </div>
-          <h1 className="text-3xl font-bold mb-1">
+          <h1 className="text-3xl font-bold mb-3">
             Intro to Programming, <span className="text-teal-400 font-mono">without the friction</span>
           </h1>
-          <p className="text-slate-300 text-sm">
-            zyBooks Chapters 1–9 in Coral — short lessons, four hands-on labs, a playground,
-            a {QUIZ.length}-question quiz, and an exam-prep sheet with the graded labs' exact output.
-          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="font-mono text-xs uppercase tracking-wide text-slate-400">Chapter</label>
+            <select value={activeCh} onChange={(e) => { setActiveCh(parseInt(e.target.value, 10)); setNavSec(null); }}
+              className="bg-slate-800 text-white font-semibold border border-slate-700 rounded-lg px-3 py-2 focus:border-teal-500 focus:outline-none">
+              {CHAPTERS.map((c) => <option key={c.n} value={c.n}>Chapter {c.n} — {c.title}</option>)}
+            </select>
+          </div>
         </div>
       </header>
 
@@ -3193,8 +4445,19 @@ function App() {
         </div>
       </nav>
 
-      <main className="max-w-3xl mx-auto px-5 py-8">
-        <Active navSec={navSec} onNavDone={() => setNavSec(null)} />
+      <main className="max-w-3xl mx-auto px-5 py-6">
+        {chapterScoped && (
+          <div className="mb-5 flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-xs bg-teal-600 text-white rounded-full px-3 py-1">Chapter {activeCh}</span>
+            <span className="text-slate-700 font-semibold">{chObj.title}</span>
+          </div>
+        )}
+        {!chapterScoped && (
+          <div className="mb-5 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            This tab spans all 9 chapters.
+          </div>
+        )}
+        <Active navSec={navSec} onNavDone={() => setNavSec(null)} ch={activeCh} />
       </main>
 
       <footer className="max-w-3xl mx-auto px-5 pb-10 text-center text-xs text-slate-400">
