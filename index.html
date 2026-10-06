@@ -4507,11 +4507,326 @@ function StudyQ() {
   );
 }
 
+// ---------- Terms: terminology drill from the D278 Terminology Quiz sheet ----------
+// Every definition below is from Lissa's "D278 Terminology Quiz Questions & Answers" sheet
+// (Quizlet C173 V3, 44 multiple choice + 44 true/false). One fix: the sheet's
+// interpreted-language example listed C#; zyBooks lists C# as compiled, so it's dropped.
+const TERM_CATS = [
+  { id: "all", label: "All" },
+  { id: "basics", label: "Program basics" },
+  { id: "data", label: "Data & operators" },
+  { id: "control", label: "Branches & loops" },
+  { id: "func", label: "Functions" },
+  { id: "design", label: "Algorithms, SDLC & UML" },
+  { id: "lang", label: "Languages" },
+];
+const TERMS = [
+  // --- Program basics (Ch. 1) ---
+  { c: "basics", t: "Program", d: "A list of statements, each statement carrying out some action and executing one at a time." },
+  { c: "basics", t: "Input", d: "A program gets data, perhaps from a file, keyboard, touchscreen, network, etc." },
+  { c: "basics", t: "Process", d: "A program performs computations on that data, such as adding two values like x + y." },
+  { c: "basics", t: "Output", d: "A program puts that data somewhere, such as to a file, screen, network, etc." },
+  { c: "basics", t: "Comment", d: "Text a programmer adds to a program, to be read by humans (other programmers), but ignored by the program when executing." },
+  { c: "basics", t: "Flowchart", d: "A graphical language for creating computer programs." },
+  { c: "basics", t: "Pseudocode", d: "Text that resembles a program in a real programming language but is simplified to aid human understanding." },
+  { c: "basics", t: "Characters", d: "Any letter (a-z, A-Z), digit (0-9), or symbol (~, !, @, etc.)." },
+  { c: "basics", t: "String literal", d: "Text (characters) within double quotes." },
+  { c: "basics", t: "Newline", d: "Special two-character sequence \\n whose appearance in an output string literal causes the cursor to move to the next output line." },
+  { c: "basics", t: "Bit", d: "A single 0 or 1." },
+  { c: "basics", t: "Byte", d: "Eight bits. Ex. 11000101" },
+  { c: "basics", t: "Binary number", d: "A number using base two: only the digits 0 and 1." },
+  { c: "basics", t: "ASCII", d: "American Standard Code for Information Interchange. The numerical representation of a character. Ex. Z is stored in a computer as 1011010." },
+  { c: "basics", t: "Moore's Law", d: "Engineers have reduced switch sizes by half about every 2 years." },
+  { c: "basics", t: "Run, execute", d: "Words for carrying out a program's statements." },
+
+  // --- Data & operators (Ch. 2, 3, 5) ---
+  { c: "data", t: "Variable", d: "Used by programs to refer to data. It is a named item, used to hold a value." },
+  { c: "data", t: "Variable declaration", d: "Declares a new variable, specifying the variable's name and type." },
+  { c: "data", t: "Assignment statement", d: "Assigns a variable with a value, such as x = 5." },
+  { c: "data", t: "Identifier", d: "A name created by a programmer for an item like a variable or function. Made of letters, underscores, and digits, and must start with a letter or underscore. Case sensitive." },
+  { c: "data", t: "Reserved word (keyword)", d: "A word that is part of the language, like integer, Get or Put. These words cannot be used as an identifier." },
+  { c: "data", t: "Lower camel case", d: "Capitalize each word except the first, as in numApples." },
+  { c: "data", t: "Naming conventions", d: "A set of style guidelines defined by a company, team, teacher, etc., for naming variables." },
+  { c: "data", t: "Expression", d: "Can be a number, a variable name (numApples), or a simple calculation like (numApples + 1)." },
+  { c: "data", t: "Operator", d: "A symbol that performs a built-in calculation, like the + which performs addition." },
+  { c: "data", t: "Precedence rules", d: "An expression is evaluated using the order of standard mathematics." },
+  { c: "data", t: "Integer", d: "Variable type that can hold whole numbers." },
+  { c: "data", t: "Floating-point number", d: "Refers to the decimal point being able to appear anywhere (\"float\") in the number. Ex. 98.6, 0.0006." },
+  { c: "data", t: "Floating-point literal", d: "A number with a fractional part, even if that fraction is 0." },
+  { c: "data", t: "Boolean", d: "Type that has just two values: true or false." },
+  { c: "data", t: "Constant", d: "A named value item that holds a value that cannot change." },
+  { c: "data", t: "Type conversion", d: "A conversion of one data type to another, such as an integer to a float." },
+  { c: "data", t: "Modulo operator", d: "Evaluates to the remainder of the division of two integer operands. Ex: 23 % 10 is 3." },
+  { c: "data", t: "Divide-by-zero error", d: "Occurs at runtime if a divisor is 0, causing a program to terminate." },
+  { c: "data", t: "Infinity or -Infinity", d: "The result of dividing a nonzero floating-point number by zero." },
+  { c: "data", t: "Not a number (NaN)", d: "Indicates an unrepresentable or undefined value." },
+  { c: "data", t: "Epsilon", d: "The difference threshold indicating that floating-point numbers are equal." },
+  { c: "data", t: "Equality operator", d: "Checks whether two operands' values are the same (==) or different (!=)." },
+  { c: "data", t: "Relational operator", d: "Checks how one operand's value relates to another. For example, >=." },
+  { c: "data", t: "Logical operator", d: "Treats operands as being true or false, and evaluates to true or false." },
+  { c: "data", t: "Array", d: "A special variable having one name, but storing a list of data items, with each item being directly accessible." },
+  { c: "data", t: "Element", d: "Each item in an array." },
+  { c: "data", t: "Index", d: "Each element's location number in an array." },
+  { c: "data", t: "RandomNumber()", d: "A built-in zyFlowchart function that takes two arguments, lowValue and highValue, and returns a random integer in that range. Ex: RandomNumber(1, 10)." },
+
+  // --- Branches & loops (Ch. 3, 4) ---
+  { c: "control", t: "Branch", d: "A sequence of statements only executed under a certain condition." },
+  { c: "control", t: "If-else", d: "A decision and its two branches. IF the decision's expression is true, the first branch executes; ELSE the second branch executes." },
+  { c: "control", t: "Nested branches", d: "Branches inside branches. They can take on various forms, and the if-else branches may even use different variables." },
+  { c: "control", t: "Loop", d: "A program construct that repeatedly executes the loop's statements (known as the loop body)." },
+  { c: "control", t: "While loop", d: "A loop that repeatedly executes the loop body while the loop's expression evaluates to true." },
+  { c: "control", t: "Do-while loop", d: "Loop that first executes the loop body's statements, then checks the loop condition." },
+  { c: "control", t: "For loop", d: "A loop consisting of a loop variable initialization, a loop expression, and a loop variable update that typically describes iterating for a specific number of times." },
+  { c: "control", t: "Nested loop", d: "A loop that appears in the body of another loop." },
+  { c: "control", t: "Iteration", d: "Each time through a loop's statements." },
+  { c: "control", t: "Sentinel value", d: "Special value indicating the end of a list, such as a list of positive integers ending with 0." },
+
+  // --- Functions (Ch. 6) ---
+  { c: "func", t: "Function", d: "A named list of statements." },
+  { c: "func", t: "Function", d: "A list of statements executed by invoking the function's name, with such invoking known as a function call." },
+  { c: "func", t: "Function definition", d: "Consists of the new function's name and block of statements." },
+  { c: "func", t: "Function call", d: "An invocation of a function's name, causing the function's statements to execute." },
+  { c: "func", t: "Parameter", d: "A function input specified in a function definition." },
+  { c: "func", t: "Argument", d: "A value provided to a function's parameter during a function call." },
+  { c: "func", t: "Argument", d: "Any function input values that appear within ( ), separated by commas if more than one." },
+  { c: "func", t: "Return statement", d: "Statement that returns the specified value and immediately exits the function." },
+  { c: "func", t: "Return variable", d: "A function may return one value, and does so by assigning this with the return value." },
+  { c: "func", t: "Modular development", d: "Dividing a program into separate modules that can be developed and tested separately, then integrated into a single program." },
+  { c: "func", t: "Incremental development", d: "Writing, compiling, and testing a small amount of code, then writing, compiling, and testing a small amount more, and so on." },
+  { c: "func", t: "Incremental development", d: "A process in which a programmer writes and tests a few statements, then writes and tests a small amount more." },
+
+  // --- Algorithms, SDLC & UML (Ch. 7, 8) ---
+  { c: "design", t: "Algorithm", d: "A sequence of steps that solves a problem, generating correct output for any valid input values." },
+  { c: "design", t: "Algorithm time efficiency", d: "The number of calculations required to solve a problem." },
+  { c: "design", t: "Systems development life cycle (SDLC)", d: "Analysis phase, design phase, implementation phase, testing phase." },
+  { c: "design", t: "Waterfall approach", d: "Carrying out the SDLC phases in sequence." },
+  { c: "design", t: "Agile (spiral) approach", d: "A program is built by doing small amounts of each SDLC phase in sequence, then repeating." },
+  { c: "design", t: "Analysis", d: "First step in the waterfall approach. Defines a program's goals." },
+  { c: "design", t: "Design", d: "Second step in the waterfall approach. Defines specifics of how to build a program." },
+  { c: "design", t: "Implementation", d: "Third step in the waterfall approach. Writes the program." },
+  { c: "design", t: "Testing", d: "Fourth step in the waterfall approach. Checks that the program correctly meets the goals." },
+  { c: "design", t: "Universal Modeling Language (UML)", d: "Modeling language for software design that uses different types of diagrams to visualize the structure and behavior of programs." },
+  { c: "design", t: "Structural diagrams", d: "UML diagrams used to design the static elements of a program." },
+  { c: "design", t: "Behavioral diagrams", d: "UML diagrams used to design the dynamic elements of a program." },
+  { c: "design", t: "Use case", d: "Describes a singular goal of one user and briefly outlines how they will accomplish that goal." },
+  { c: "design", t: "Use case diagram", d: "Behavioral diagram used to visually model how a user interacts with a software program." },
+  { c: "design", t: "Class diagram", d: "Models the objects of a program." },
+  { c: "design", t: "Sequence diagram", d: "Shows the interaction between software components and the order of events." },
+  { c: "design", t: "Activity diagram", d: "A flowchart of an activity (loop, function, etc.) within the program." },
+
+  // --- Languages & libraries (Ch. 9) ---
+  { c: "lang", t: "Compiled language", d: "First converted by a tool (compiler) into machine code, which can run on a particular machine. Ex. C, C++, and Java." },
+  { c: "lang", t: "Interpreted language", d: "Run one statement at a time by another program called an interpreter. Ex. Python, JavaScript." },
+  { c: "lang", t: "Interpreter", d: "Used to run a program's statements." },
+  { c: "lang", t: "Object-oriented language", d: "Supports decomposing a program into objects." },
+  { c: "lang", t: "Library", d: "A set of pre-written functions that carry out common tasks, that a programmer can use to improve productivity." },
+].map((x, i) => ({ ...x, id: "tm" + i }));
+
+const TERM_KEY = "d278-terms-missed";
+function termLoad() { try { return JSON.parse(localStorage.getItem(TERM_KEY) || "{}"); } catch (e) { return {}; } }
+function termSave(m) { try { localStorage.setItem(TERM_KEY, JSON.stringify(m)); } catch (e) {} }
+function termShuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function uniqTerms(list) { const s = []; list.forEach((x) => { if (!s.includes(x.t)) s.push(x.t); }); return s; }
+
+// Build one question. mode "pick": definition -> choose the term (same-topic distractors first).
+// mode "tf": definition paired with a term; about half the pairings are true.
+function termQuestion(item, mode) {
+  const sameCat = termShuffle(uniqTerms(TERMS.filter((x) => x.c === item.c && x.t !== item.t)));
+  const others = termShuffle(uniqTerms(TERMS.filter((x) => x.c !== item.c && x.t !== item.t)));
+  const pool = sameCat.concat(others);
+  if (mode === "tf") {
+    const isTrue = Math.random() < 0.5;
+    return { item, mode, shown: isTrue ? item.t : pool[0], isTrue };
+  }
+  return { item, mode, options: termShuffle([item.t].concat(pool.slice(0, 3))) };
+}
+
+function Terms() {
+  const [missed, setMissed] = useState(termLoad);
+  const [cat, setCat] = useState("all");
+  const [mode, setMode] = useState("pick");
+  const [round, setRound] = useState(null);   // { qs, i, right, wrong, missedThisRound }
+  const [picked, setPicked] = useState(null);
+
+  const missCount = Object.keys(missed).length;
+  const poolFor = (c) => c === "missed" ? TERMS.filter((x) => missed[x.id]) : c === "all" ? TERMS : TERMS.filter((x) => x.c === c);
+
+  const start = (c = cat, m = mode) => {
+    const items = termShuffle(poolFor(c));
+    if (!items.length) return;
+    setRound({ qs: items.map((it) => termQuestion(it, m)), i: 0, right: 0, wrong: 0, list: [] });
+    setPicked(null);
+  };
+  const mark = (ok, q) => {
+    const m = { ...missed };
+    if (ok) delete m[q.item.id]; else m[q.item.id] = (m[q.item.id] || 0) + 1;
+    setMissed(m); termSave(m);
+    setRound((r) => ({ ...r, right: r.right + (ok ? 1 : 0), wrong: r.wrong + (ok ? 0 : 1), list: ok ? r.list : r.list.concat(q.item) }));
+  };
+  const next = () => { setPicked(null); setRound((r) => ({ ...r, i: r.i + 1 })); };
+
+  // ----- setup screen -----
+  if (!round) {
+    return (
+      <div className="space-y-5">
+        <section className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+          <SectionHead>Terminology drill</SectionHead>
+          <p className="text-slate-600 text-sm mb-4">
+            {TERMS.length} definitions from your D278 terminology sheet. The OA leans hard on these, so drill until the Missed pile is empty.
+          </p>
+          <div className="font-mono text-xs uppercase tracking-wide text-slate-500 mb-2">Mode</div>
+          <div className="grid grid-cols-2 gap-2 mb-5">
+            {[["pick", "Pick the term", "Read the definition, choose the term"], ["tf", "True or false", "Does this term match the definition?"]].map(([id, name, sub]) => (
+              <button key={id} onClick={() => setMode(id)}
+                className={`text-left rounded-xl border-2 px-4 py-3 transition-colors ${mode === id ? "border-teal-600 bg-teal-50" : "border-slate-200 bg-slate-50 hover:border-teal-400"}`}>
+                <div className={`font-semibold ${mode === id ? "text-teal-900" : "text-slate-800"}`}>{name}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{sub}</div>
+              </button>
+            ))}
+          </div>
+          <div className="font-mono text-xs uppercase tracking-wide text-slate-500 mb-2">Topic</div>
+          <div className="flex flex-wrap gap-2 mb-5">
+            {TERM_CATS.map((c) => {
+              const n = poolFor(c.id).length;
+              return (
+                <button key={c.id} onClick={() => setCat(c.id)}
+                  className={`font-mono text-xs rounded-full px-3 py-1.5 border ${cat === c.id ? "bg-slate-900 border-slate-900 text-white" : "bg-slate-50 border-slate-300 text-slate-600 hover:border-teal-500"}`}>
+                  {c.label} <span className="opacity-60">{n}</span>
+                </button>
+              );
+            })}
+            <button disabled={!missCount} onClick={() => setCat("missed")}
+              className={`font-mono text-xs rounded-full px-3 py-1.5 border ${cat === "missed" ? "bg-rose-600 border-rose-600 text-white" : "bg-rose-50 border-rose-200 text-rose-700"} disabled:opacity-40`}>
+              Missed <span className="opacity-70">{missCount}</span>
+            </button>
+          </div>
+          <button onClick={() => start()} disabled={cat === "missed" && !missCount}
+            className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-6 py-2.5 rounded-lg disabled:opacity-40">
+            Start {poolFor(cat).length} questions
+          </button>
+        </section>
+        <p className="text-xs text-slate-500 px-1">
+          A term leaves the Missed pile the next time you get it right. Missed terms save on this device.
+        </p>
+      </div>
+    );
+  }
+
+  // ----- results screen -----
+  if (round.i >= round.qs.length) {
+    const total = round.qs.length, pct = Math.round((round.right / total) * 100);
+    return (
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+        <div className="text-center">
+          <div className="font-mono text-6xl font-bold text-slate-900 mb-2">{pct}%</div>
+          <p className="text-slate-600 mb-4">{round.right} of {total} right. {missCount ? `${missCount} term${missCount === 1 ? "" : "s"} in your Missed pile.` : "Missed pile is empty."}</p>
+          <div className="flex gap-2 justify-center flex-wrap">
+            {missCount > 0 && <button onClick={() => { setCat("missed"); start("missed"); }} className="bg-rose-600 hover:bg-rose-700 text-white font-semibold px-5 py-2.5 rounded-lg">Drill missed ({missCount})</button>}
+            <button onClick={() => start()} className="bg-teal-700 hover:bg-teal-800 text-white font-semibold px-5 py-2.5 rounded-lg">Run it again</button>
+            <button onClick={() => setRound(null)} className="border border-slate-300 text-slate-700 font-semibold px-5 py-2.5 rounded-lg">Change topic</button>
+          </div>
+        </div>
+        {round.list.length > 0 && (
+          <div className="mt-6 pt-5 border-t border-slate-200">
+            <div className="font-mono text-xs uppercase tracking-wide text-slate-500 mb-3">Missed this round</div>
+            <ul className="space-y-3">
+              {round.list.map((it, k) => (
+                <li key={k} className="text-sm"><span className="font-semibold text-slate-900">{it.t}</span><span className="text-slate-600"> — {it.d}</span></li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ----- question screen -----
+  const q = round.qs[round.i];
+  const total = round.qs.length;
+  const answered = picked !== null;
+  let ok = false;
+  if (answered) ok = q.mode === "tf" ? picked === q.isTrue : picked === q.item.t;
+  const catLabel = (TERM_CATS.find((c) => c.id === q.item.c) || {}).label;
+
+  return (
+    <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+      <div className="flex justify-between items-center mb-3 gap-2">
+        <span className="font-mono text-xs text-slate-500">Term {round.i + 1} of {total}</span>
+        <span className="font-mono text-xs"><span className="text-teal-700 font-semibold">{round.right} right</span> · <span className="text-rose-600">{round.wrong} missed</span></span>
+      </div>
+      <div className="h-1.5 bg-slate-100 rounded-full mb-4">
+        <div className="h-1.5 bg-teal-600 rounded-full transition-all" style={{ width: `${(round.i / total) * 100}%` }} />
+      </div>
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <span className="font-mono text-[11px] uppercase tracking-wide bg-slate-100 text-slate-600 rounded px-2 py-1">{catLabel}</span>
+        {missed[q.item.id] && <span className="font-mono text-[11px] uppercase tracking-wide bg-rose-50 text-rose-700 rounded px-2 py-1">Missed before</span>}
+      </div>
+      <p className="text-slate-900 text-lg font-medium mb-4 leading-snug">{q.item.d}</p>
+
+      {q.mode === "pick" ? (
+        <div className="space-y-2">
+          {q.options.map((opt) => {
+            let cls = "border-slate-300 bg-slate-50 hover:border-teal-500";
+            if (answered) {
+              if (opt === q.item.t) cls = "border-teal-600 bg-teal-50 text-teal-900 font-semibold";
+              else if (opt === picked) cls = "border-rose-400 bg-rose-50 text-rose-900";
+              else cls = "border-slate-200 bg-slate-50 text-slate-400";
+            }
+            return (
+              <button key={opt} disabled={answered}
+                onClick={() => { setPicked(opt); mark(opt === q.item.t, q); }}
+                className={`w-full text-left border-2 rounded-xl px-4 py-3 text-[15px] transition-colors ${cls}`}>{opt}</button>
+            );
+          })}
+        </div>
+      ) : (
+        <div>
+          <div className="rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 mb-3 text-center">
+            <span className="font-mono text-xs uppercase tracking-wide text-slate-500 block mb-1">Matches this term?</span>
+            <span className="text-xl font-bold text-slate-900">{q.shown}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {[[true, "True"], [false, "False"]].map(([val, label]) => {
+              let cls = "border-slate-300 bg-slate-50 hover:border-teal-500 text-slate-800";
+              if (answered) {
+                if (val === q.isTrue) cls = "border-teal-600 bg-teal-50 text-teal-900";
+                else if (val === picked) cls = "border-rose-400 bg-rose-50 text-rose-900";
+                else cls = "border-slate-200 bg-slate-50 text-slate-400";
+              }
+              return (
+                <button key={label} disabled={answered}
+                  onClick={() => { setPicked(val); mark(val === q.isTrue, q); }}
+                  className={`border-2 rounded-xl px-4 py-3 font-semibold transition-colors ${cls}`}>{label}</button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {answered && (
+        <div className={`mt-4 rounded-xl px-4 py-3 text-sm ${ok ? "bg-teal-50 border border-teal-200 text-teal-900" : "bg-rose-50 border border-rose-200 text-rose-900"}`}>
+          <strong>{ok ? "Correct." : "Not quite."}</strong>{" "}
+          {q.mode === "tf" && !q.isTrue ? <>That's <strong>{q.item.t}</strong>, not {q.shown}.</> : <>The term is <strong>{q.item.t}</strong>.</>}
+        </div>
+      )}
+      <div className="mt-4 flex gap-2 flex-wrap">
+        {answered && (
+          <button onClick={next} className="bg-slate-900 hover:bg-slate-800 text-white font-semibold px-6 py-2.5 rounded-lg">
+            {round.i + 1 >= total ? "See results" : "Next →"}
+          </button>
+        )}
+        <button onClick={() => setRound(null)} className="border border-slate-300 text-slate-600 font-semibold px-4 py-2.5 rounded-lg text-sm">Quit round</button>
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
   { id: "learn", label: "Learn", C: Learn },
   { id: "labs", label: "Labs", C: Labs },
   { id: "code", label: "Playground", C: Playground },
   { id: "quiz", label: "Quiz", C: Quiz },
+  { id: "terms", label: "Terms", C: Terms },
   { id: "exam", label: "Exam Prep", C: ExamPrep },
   { id: "studyq", label: "Study Q\u2019s", C: StudyQ },
 ];
@@ -4546,7 +4861,7 @@ function App() {
           <div className="flex items-center gap-2 flex-wrap">
             <label className="font-mono text-xs uppercase tracking-wide text-slate-400">Chapter</label>
             <select value={activeCh} onChange={(e) => { setActiveCh(parseInt(e.target.value, 10)); setNavSec(null); }}
-              className="bg-slate-800 text-white font-semibold border border-slate-700 rounded-lg px-3 py-2 focus:border-teal-500 focus:outline-none">
+              className="bg-slate-800 text-white font-semibold border border-slate-700 rounded-lg px-3 py-2 focus:border-teal-500 focus:outline-none max-w-full min-w-0">
               {CHAPTERS.map((c) => <option key={c.n} value={c.n}>Chapter {c.n} — {c.title}</option>)}
             </select>
           </div>
